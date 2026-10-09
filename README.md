@@ -71,8 +71,15 @@ Se crean automaticamente al iniciar LocalStack mediante `scripts/init-dynamodb.s
 
 | Tabla | Servicio | Partition Key | GSI |
 |-------|----------|---------------|-----|
-| `certificates` | Sealify | `id` | `SerialNumberIndex` (`serial_number`) |
-| `invoices` | SRI Integrator | `id` | `InvoiceIdIndex` (`invoiceId`) |
+| `certificates` | faclab-invoicing | `id` | `SerialNumberIndex` (`serial_number`) |
+| `company_config` | faclab-invoicing | `id` | — |
+| `invoices` | faclab-invoicing | `id` | `SaleIdIndex` (`saleId`), `StatusIndex` (`status`) |
+
+Si la tabla ya existía, el script agrega los índices que falten (`add_index_if_not_exists`). Para aplicarlo sin reiniciar LocalStack:
+
+```bash
+docker compose exec localstack /etc/localstack/init/ready.d/init-dynamodb.sh
+```
 
 ## Variables de entorno
 
