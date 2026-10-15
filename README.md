@@ -85,6 +85,17 @@ docker compose exec localstack /etc/localstack/init/ready.d/init-dynamodb.sh
 
 Consulta `.env.example` para ver todas las variables disponibles y sus valores por defecto.
 
+## Integracion continua
+
+Cada PR y cada push a `master` corren `.github/workflows/ci.yml` en GitHub Actions (job `validate`): valida `docker-compose.yml` con las variables de `.env.example` y revisa los scripts con ShellCheck.
+
+Para correr lo mismo en local:
+
+```bash
+docker compose --env-file .env.example config -q
+shellcheck scripts/*.sh   # o: docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable scripts/*.sh
+```
+
 ## Comandos utiles
 
 ```bash
