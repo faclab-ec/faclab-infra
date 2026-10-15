@@ -26,3 +26,7 @@ jobs:
 
       - name: ShellCheck
         run: shellcheck scripts/*.sh
+
+      # Clones SigNoz's deploy/ at the pinned tag and validates it with our overlay
+      - name: Validate SigNoz local
+        run: SIGNOZ_DIR="$RUNNER_TEMP/signoz" scripts/signoz.sh config

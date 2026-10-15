@@ -1,0 +1,10 @@
+# Joins SigNoz's OTel collector to faclab_network, so the Faclab containers export to
+# http://signoz-otel-collector:4317. Layered on SigNoz's own compose by scripts/signoz.sh.
+services:
+  otel-collector:
+    networks:
+      - faclab_network
+
+networks:
+  faclab_network:
+    external: true
