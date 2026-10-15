@@ -34,8 +34,11 @@ faclab-infra/
 ├── docker-compose.yml          # Definicion de servicios
 ├── .env.example                # Variables de entorno (plantilla)
 ├── .env                        # Variables de entorno (no versionado)
+├── observability/
+│   └── docker-compose.signoz.yml  # Une el collector de SigNoz a faclab_network
 ├── scripts/
-│   └── init-dynamodb.sh        # Crea tablas DynamoDB en LocalStack al iniciar
+│   ├── init-dynamodb.sh        # Crea tablas DynamoDB en LocalStack al iniciar
+│   └── signoz.sh               # Levanta SigNoz local (up, down, status, config)
 └── .docker/
     └── .volumes/aws/           # Datos persistentes de LocalStack
 ```
@@ -81,19 +84,45 @@ Si la tabla ya existía, el script agrega los índices que falten (`add_index_if
 docker compose exec localstack /etc/localstack/init/ready.d/init-dynamodb.sh
 ```
 
+## SigNoz local (observabilidad)
+
+`scripts/signoz.sh` levanta [SigNoz](https://signoz.io) para ver trazas, métricas y logs de los servicios. Usa el Docker Compose del propio SigNoz más `observability/docker-compose.signoz.yml`, que une su collector de OpenTelemetry a `faclab_network`.
+
+```bash
+scripts/signoz.sh up       # levanta SigNoz (la primera vez lo clona)
+scripts/signoz.sh status   # contenedores y endpoints
+scripts/signoz.sh down     # lo detiene; los datos quedan en sus volúmenes
+```
+
+- Busca SigNoz en `../Telemetry`, junto a este repo; `SIGNOZ_DIR` cambia la ruta. Si no existe, clona solo `deploy/` de la etiqueta `SIGNOZ_VERSION` (por defecto `v0.118.0`).
+- Necesita varios GB de memoria libres para Docker (ClickHouse y ZooKeeper).
+- La interfaz queda en [http://localhost:8080](http://localhost:8080).
+- **La primera vez hay que crear la cuenta de administrador en esa interfaz.** Hasta entonces SigNoz no le entrega su configuración al collector y nada escucha en 4317/4318: los servicios ven `UNAVAILABLE` al exportar. `up` y `status` lo recuerdan mientras falte.
+
+Para que los servicios exporten a SigNoz, ver el detalle en el `.env.example` y el README de cada uno:
+
+| Servicio | Variables |
+|----------|-----------|
+| faclab-core (contenedor en `faclab_network`) | `OTEL_ENABLED=true`, `OTEL_OTLP_ENDPOINT=http://signoz-otel-collector:4317` |
+| faclab-invoicing (`npm run dev` en el host) | `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317` (el valor por defecto) |
+| faclab-invoicing (contenedor en `faclab_network`) | `OTEL_EXPORTER_OTLP_ENDPOINT=http://signoz-otel-collector:4317` |
+
+Con todo arriba, una venta del POS se ve en SigNoz como una sola traza: el request en faclab-core, `send sales.confirmed`, `process sales.confirmed` en faclab-invoicing, `send invoices` y `process invoices` de vuelta en faclab-core.
+
 ## Variables de entorno
 
 Consulta `.env.example` para ver todas las variables disponibles y sus valores por defecto.
 
 ## Integracion continua
 
-Cada PR y cada push a `master` corren `.github/workflows/ci.yml` en GitHub Actions (job `validate`): valida `docker-compose.yml` con las variables de `.env.example` y revisa los scripts con ShellCheck.
+Cada PR y cada push a `master` corren `.github/workflows/ci.yml` en GitHub Actions (job `validate`): valida `docker-compose.yml` con las variables de `.env.example`, revisa los scripts con ShellCheck y valida el compose de SigNoz con `observability/docker-compose.signoz.yml` (`scripts/signoz.sh config`).
 
 Para correr lo mismo en local:
 
 ```bash
 docker compose --env-file .env.example config -q
 shellcheck scripts/*.sh   # o: docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable scripts/*.sh
+scripts/signoz.sh config
 ```
 
 ## Comandos utiles
