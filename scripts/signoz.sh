@@ -35,6 +35,20 @@ compose() {
     "$@"
 }
 
+# Until its first admin account exists, SigNoz gives the collector no pipelines and nothing
+# listens on 4317/4318 ("cannot create agent without orgId")
+setup_reminder() {
+  local version=""
+  for _ in $(seq 1 30); do
+    version="$(curl -fsS --max-time 2 http://localhost:8080/api/v1/version 2>/dev/null)" && break
+    sleep 2
+  done
+  if [[ "$version" == *'"setupCompleted":false'* ]]; then
+    echo "First run: create the admin account at http://localhost:8080;" \
+      "until then the collector accepts no data."
+  fi
+}
+
 endpoints() {
   cat <<EOF
 SigNoz UI: http://localhost:8080
@@ -50,6 +64,7 @@ case "${1:-}" in
       docker network create faclab_network >/dev/null
     compose up -d
     endpoints
+    setup_reminder
     ;;
   down)
     compose down
@@ -57,6 +72,7 @@ case "${1:-}" in
   status)
     compose ps
     endpoints
+    setup_reminder
     ;;
   config)
     ensure_signoz

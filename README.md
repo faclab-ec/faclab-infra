@@ -97,6 +97,7 @@ scripts/signoz.sh down     # lo detiene; los datos quedan en sus volúmenes
 - Busca SigNoz en `../Telemetry`, junto a este repo; `SIGNOZ_DIR` cambia la ruta. Si no existe, clona solo `deploy/` de la etiqueta `SIGNOZ_VERSION` (por defecto `v0.118.0`).
 - Necesita varios GB de memoria libres para Docker (ClickHouse y ZooKeeper).
 - La interfaz queda en [http://localhost:8080](http://localhost:8080).
+- **La primera vez hay que crear la cuenta de administrador en esa interfaz.** Hasta entonces SigNoz no le entrega su configuración al collector y nada escucha en 4317/4318: los servicios ven `UNAVAILABLE` al exportar. `up` y `status` lo recuerdan mientras falte.
 
 Para que los servicios exporten a SigNoz, ver el detalle en el `.env.example` y el README de cada uno:
 
