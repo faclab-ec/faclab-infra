@@ -50,39 +50,34 @@ services:
     networks:
       - faclab_network
 
-  dynamodb-admin:
-    image: aaronshaf/dynamodb-admin
-    container_name: dynamodb-admin
+  # Base propia de faclab-invoicing: faclab_invoicing y faclab_invoicing_test (scripts/init-invoicing-db.sh).
+  # Los valores por defecto permiten usar un .env anterior sin cambios
+  invoicing-db:
+    image: postgres:${POSTGRES_VERSION:-17}
+    container_name: invoicing-db
     restart: unless-stopped
     environment:
-      - DYNAMO_ENDPOINT=http://aws-local:4566
-      - AWS_REGION=us-east-1
-      - AWS_ACCESS_KEY_ID=test
-      - AWS_SECRET_ACCESS_KEY=test
+      POSTGRES_PASSWORD: ${INVOICING_DB_SUPERUSER_PASSWORD:-postgres}
+      INVOICING_DB_PASSWORD: ${INVOICING_DB_PASSWORD:-faclab_invoicing}
     ports:
-      - "8001:8001"
-    depends_on:
-      - localstack
-    networks:
-      - faclab_network
-
-  localstack:
-    container_name: aws-local
-    image: localstack/localstack:${LOCALSTACK_VERSION}
-    ports:
-      - "${LOCALSTACK_PORT}:4566"
-    environment:
-      - DEBUG=${LOCALSTACK_DEBUG}
+      - "${INVOICING_DB_PORT:-5434}:5432"
     volumes:
-      - "./scripts/init-dynamodb.sh:/etc/localstack/init/ready.d/init-dynamodb.sh"
-      - "./scripts/init-s3.sh:/etc/localstack/init/ready.d/init-s3.sh"
-      - "${LOCALSTACK_VOLUME_DIR}:/var/lib/localstack"
-      - "/var/run/docker.sock:/var/run/docker.sock"
+      - invoicing_db_data:/var/lib/postgresql/data
+      - "./scripts/init-invoicing-db.sh:/docker-entrypoint-initdb.d/init-invoicing-db.sh:ro"
     networks:
       - faclab_network
+    healthcheck:
+      # Por TCP: en el primer arranque los scripts de inicio corren en un servidor que solo escucha en el socket
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "faclab_invoicing", "-d", "faclab_invoicing"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
 volumes:
   kafka_data:
+    driver: local
+  invoicing_db_data:
     driver: local
 
 networks:
