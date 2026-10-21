@@ -8,7 +8,7 @@ Infraestructura local compartida para el ecosistema Faclab. Provee los servicios
 |----------|--------|--------------|-------------|
 | **Kafka** | `confluentinc/cp-kafka` | `29092` | Broker de mensajeria (modo KRaft, sin Zookeeper) |
 | **Kafka UI** | `provectuslabs/kafka-ui` | `9091` | Interfaz web para monitorear topics, consumers y mensajes |
-| **LocalStack** | `localstack/localstack` | `4566` | Emulador local de servicios AWS (DynamoDB) |
+| **invoicing-db** | `postgres:17` | `5434` | Base de datos de faclab-invoicing (`faclab_invoicing` y `faclab_invoicing_test`) |
 
 ## Requisitos
 
@@ -27,6 +27,8 @@ docker network create faclab_network
 docker compose up -d
 ```
 
+Si venías de la versión con LocalStack, usa `docker compose up -d --remove-orphans` para detener los contenedores `aws-local` y `dynamodb-admin`. Después puedes borrar `.docker/.volumes/aws` y las variables `LOCALSTACK_*` de tu `.env`: ya no se usan.
+
 ## Estructura del proyecto
 
 ```
@@ -37,10 +39,8 @@ faclab-infra/
 ├── observability/
 │   └── docker-compose.signoz.yml  # Une el collector de SigNoz a faclab_network
 ├── scripts/
-│   ├── init-dynamodb.sh        # Crea tablas DynamoDB en LocalStack al iniciar
+│   ├── init-invoicing-db.sh    # Crea el rol y las bases de faclab-invoicing
 │   └── signoz.sh               # Levanta SigNoz local (up, down, status, config)
-└── .docker/
-    └── .volumes/aws/           # Datos persistentes de LocalStack
 ```
 
 ## Conexion desde microservicios
@@ -58,7 +58,7 @@ networks:
 | Servicio | Host |
 |----------|------|
 | Kafka | `kafka:9092` |
-| DynamoDB (LocalStack) | `http://aws-local:4566` |
+| PostgreSQL de faclab-invoicing | `invoicing-db:5432` |
 
 ### Endpoints externos (desde el host)
 
@@ -66,23 +66,27 @@ networks:
 |----------|-----|
 | Kafka | `localhost:29092` |
 | Kafka UI | [http://localhost:9091](http://localhost:9091) |
-| DynamoDB (LocalStack) | `http://localhost:4566` |
+| PostgreSQL de faclab-invoicing | `localhost:5434` |
 
-## Tablas DynamoDB
+## Base de datos de faclab-invoicing
 
-Se crean automaticamente al iniciar LocalStack mediante `scripts/init-dynamodb.sh`:
+`invoicing-db` es un PostgreSQL 17 solo para faclab-invoicing; el del core sigue en faclab-core (`make dev`). Al iniciar un volumen vacío, `scripts/init-invoicing-db.sh` crea:
 
-| Tabla | Servicio | Partition Key | GSI |
-|-------|----------|---------------|-----|
-| `certificates` | faclab-invoicing | `id` | `SerialNumberIndex` (`serial_number`) |
-| `company_config` | faclab-invoicing | `id` | — |
-| `invoices` | faclab-invoicing | `id` | `SaleIdIndex` (`saleId`), `StatusIndex` (`status`) |
+| Objeto | Para qué |
+|--------|----------|
+| Rol `faclab_invoicing` | Usuario del servicio, dueño de las dos bases (contraseña: `INVOICING_DB_PASSWORD`) |
+| Base `faclab_invoicing` | La del servicio: `DATABASE_URL=postgres://faclab_invoicing:faclab_invoicing@localhost:5434/faclab_invoicing` |
+| Base `faclab_invoicing_test` | Las pruebas con PostgreSQL de faclab-invoicing (`TEST_DATABASE_URL`) |
 
-Si la tabla ya existía, el script agrega los índices que falten (`add_index_if_not_exists`). Para aplicarlo sin reiniciar LocalStack:
+Las tablas las crean las migraciones de faclab-invoicing (`npm run migrate up`, ver su README), no este repo.
+
+El script de inicio solo corre la primera vez, con el volumen vacío. Es idempotente; para aplicarlo a un volumen que ya existe (por ejemplo, después de cambiar `INVOICING_DB_PASSWORD`):
 
 ```bash
-docker compose exec localstack /etc/localstack/init/ready.d/init-dynamodb.sh
+docker compose exec invoicing-db /docker-entrypoint-initdb.d/init-invoicing-db.sh
 ```
+
+Para empezar de cero: `docker compose down` y `docker volume rm faclab-infra_invoicing_db_data`.
 
 ## SigNoz local (observabilidad)
 
