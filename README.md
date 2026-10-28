@@ -8,6 +8,7 @@ Infraestructura local compartida para el ecosistema Faclab. Provee los servicios
 |----------|--------|--------------|-------------|
 | **Kafka** | `confluentinc/cp-kafka` | `29092` | Broker de mensajeria (modo KRaft, sin Zookeeper) |
 | **Kafka UI** | `provectuslabs/kafka-ui` | `9091` | Interfaz web para monitorear topics, consumers y mensajes |
+| **kafka-topics** | `confluentinc/cp-kafka` | — | Crea los tópicos con varias particiones al arrancar y termina (`scripts/create-topics.sh`) |
 | **invoicing-db** | `postgres:17` | `5434` | Base de datos de faclab-invoicing (`faclab_invoicing` y `faclab_invoicing_test`) |
 
 ## Requisitos
@@ -39,6 +40,7 @@ faclab-infra/
 ├── observability/
 │   └── docker-compose.signoz.yml  # Une el collector de SigNoz a faclab_network
 ├── scripts/
+│   ├── create-topics.sh        # Crea los tópicos de Kafka con varias particiones
 │   ├── init-invoicing-db.sh    # Crea el rol y las bases de faclab-invoicing
 │   └── signoz.sh               # Levanta SigNoz local (up, down, status, config)
 ```
@@ -67,6 +69,29 @@ networks:
 | Kafka | `localhost:29092` |
 | Kafka UI | [http://localhost:9091](http://localhost:9091) |
 | PostgreSQL de faclab-invoicing | `localhost:5434` |
+
+## Tópicos de Kafka
+
+Kafka no crea tópicos por su cuenta (`KAFKA_AUTO_CREATE_TOPICS_ENABLE=false`): los crea
+`scripts/create-topics.sh`, que el servicio `kafka-topics` corre cuando Kafka está sano y luego
+termina (ADR-0005).
+
+| Tópico | Productor | Consumidores |
+|--------|-----------|--------------|
+| `sales.confirmed` | faclab-core (worker, desde el outbox) | faclab-invoicing |
+| `invoices` | faclab-invoicing | faclab-core (worker) y faclab-invoicing |
+| `dlq` | faclab-invoicing (mensajes que no pudo procesar) | — |
+
+- Cada tópico tiene `KAFKA_TOPIC_PARTITIONS` particiones (6 por defecto) y replicación 1 (un solo
+  nodo). Los mensajes llevan como clave la empresa (`tenant_id`): los de una empresa van en orden
+  por la misma partición y las empresas se reparten entre las demás.
+- Es idempotente: un tópico que ya existe conserva sus mensajes, y si tiene menos particiones crece
+  hasta `KAFKA_TOPIC_PARTITIONS` (Kafka no las reduce). Al crecer, los mensajes nuevos de una empresa
+  pueden ir a otra partición, así que conviene hacerlo con el tópico quieto.
+- Para correrlo de nuevo (por ejemplo, después de cambiar `KAFKA_TOPIC_PARTITIONS`):
+  `docker compose run --rm kafka-topics`.
+- Los mensajes que faclab-core no pudo procesar no van a `dlq` sino a su tabla `dead_letters`, que se
+  reprocesa con `make reprocess-dead-letter` en faclab-core.
 
 ## Base de datos de faclab-invoicing
 
