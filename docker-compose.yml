@@ -19,6 +19,8 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      # Topics come from scripts/create-topics.sh (service kafka-topics), with several partitions
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       # Storage
       KAFKA_LOG_RETENTION_HOURS: ${KAFKA_LOG_RETENTION_HOURS}
       KAFKA_LOG_DIRS: /var/lib/kafka/data
@@ -34,6 +36,24 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+
+  # Creates the topics once Kafka is healthy and exits (scripts/create-topics.sh)
+  kafka-topics:
+    image: confluentinc/cp-kafka:${KAFKA_VERSION}
+    container_name: kafka-topics
+    restart: "no"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      # The default keeps an .env from before this setting working
+      KAFKA_TOPIC_PARTITIONS: ${KAFKA_TOPIC_PARTITIONS:-6}
+    entrypoint: ["/scripts/create-topics.sh"]
+    volumes:
+      - "./scripts/create-topics.sh:/scripts/create-topics.sh:ro"
+    networks:
+      - faclab_network
 
   kafka-ui:
     image: provectuslabs/kafka-ui:${KAFKA_UI_VERSION}
