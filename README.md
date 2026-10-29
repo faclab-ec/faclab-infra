@@ -10,6 +10,7 @@ Infraestructura local compartida para el ecosistema Faclab. Provee los servicios
 | **Kafka UI** | `provectuslabs/kafka-ui` | `9091` | Interfaz web para monitorear topics, consumers y mensajes |
 | **kafka-topics** | `confluentinc/cp-kafka` | — | Crea los tópicos con varias particiones al arrancar y termina (`scripts/create-topics.sh`) |
 | **invoicing-db** | `postgres:17` | `5434` | Base de datos de faclab-invoicing (`faclab_invoicing` y `faclab_invoicing_test`) |
+| **object-storage** | `dxflrs/garage` | `3900` | Almacenamiento de objetos compatible con S3 (Garage) para las facturas autorizadas de faclab-invoicing |
 
 ## Requisitos
 
@@ -37,6 +38,8 @@ faclab-infra/
 ├── docker-compose.yml          # Definicion de servicios
 ├── .env.example                # Variables de entorno (plantilla)
 ├── .env                        # Variables de entorno (no versionado)
+├── garage/
+│   └── garage.toml             # Configuracion de Garage (un nodo, sin replicacion)
 ├── observability/
 │   └── docker-compose.signoz.yml  # Une el collector de SigNoz a faclab_network
 ├── scripts/
@@ -61,6 +64,7 @@ networks:
 |----------|------|
 | Kafka | `kafka:9092` |
 | PostgreSQL de faclab-invoicing | `invoicing-db:5432` |
+| Almacenamiento de objetos (S3) | `http://object-storage:3900` |
 
 ### Endpoints externos (desde el host)
 
@@ -69,6 +73,7 @@ networks:
 | Kafka | `localhost:29092` |
 | Kafka UI | [http://localhost:9091](http://localhost:9091) |
 | PostgreSQL de faclab-invoicing | `localhost:5434` |
+| Almacenamiento de objetos (S3) | `http://localhost:3900` |
 
 ## Tópicos de Kafka
 
@@ -112,6 +117,31 @@ docker compose exec invoicing-db /docker-entrypoint-initdb.d/init-invoicing-db.s
 ```
 
 Para empezar de cero: `docker compose down` y `docker volume rm faclab-infra_invoicing_db_data`.
+
+## Almacenamiento de objetos
+
+`object-storage` es [Garage](https://garagehq.deuxfleurs.fr), un servicio compatible con S3, en un
+solo nodo. faclab-invoicing guarda ahí el XML autorizado de cada factura
+(`tenants/{tenant_id}/invoices/{año}/{clave de acceso}.xml`, S4.1). Al arrancar con
+`--single-node --default-bucket`, Garage crea la llave de acceso y el bucket de las variables
+`OBJECT_STORAGE_*`; no hace falta ningún script.
+
+| Dato | Valor local |
+|------|-------------|
+| Endpoint | `http://localhost:3900` (desde un contenedor, `http://object-storage:3900`) |
+| Región | `garage` |
+| Bucket | `faclab-invoicing` (`OBJECT_STORAGE_BUCKET`) |
+| Llave | `OBJECT_STORAGE_ACCESS_KEY_ID` y `OBJECT_STORAGE_SECRET_ACCESS_KEY`; los valores por defecto son de desarrollo y coinciden con los de faclab-invoicing en local |
+
+```bash
+docker compose exec object-storage /garage status          # estado del nodo
+docker compose exec object-storage /garage bucket info faclab-invoicing   # objetos y tamaño
+```
+
+Los datos quedan en el volumen `faclab-infra_object_storage_data`. Se eligió Garage porque MinIO
+dejó de publicar imágenes de su edición comunitaria en 2025 y archivó su repositorio en 2026; qué
+servicio corre en el VPS se decide en S8.1 y la copia fuera del servidor, en S8.3. Cualquier
+servicio compatible con S3 sirve: faclab-invoicing solo usa su API.
 
 ## SigNoz local (observabilidad)
 
