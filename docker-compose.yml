@@ -94,10 +94,40 @@ services:
       retries: 10
       start_period: 10s
 
+  # Object storage compatible with S3 for faclab-invoicing: the authorized invoices (S4.1, D-2).
+  # One node; --default-bucket creates the bucket and the access key of the environment. The
+  # defaults are development-only values
+  object-storage:
+    image: dxflrs/garage:${GARAGE_VERSION:-v2.4.1}
+    container_name: object-storage
+    restart: unless-stopped
+    command: ["/garage", "server", "--single-node", "--default-bucket"]
+    environment:
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET:-fac0000000000000000000000000000000000000000000000000000000000000}
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN:-dev-only-change-me}
+      GARAGE_DEFAULT_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY_ID:-GKfac00000000000000000000000000000}
+      GARAGE_DEFAULT_SECRET_KEY: ${OBJECT_STORAGE_SECRET_ACCESS_KEY:-facfacfacfacfacfacfacfacfacfacfacfacfacfacfacfacfacfacfacfacfac0}
+      GARAGE_DEFAULT_BUCKET: ${OBJECT_STORAGE_BUCKET:-faclab-invoicing}
+    ports:
+      - "${OBJECT_STORAGE_PORT:-3900}:3900"
+    volumes:
+      - "./garage/garage.toml:/etc/garage.toml:ro"
+      - object_storage_data:/var/lib/garage
+    networks:
+      - faclab_network
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
 volumes:
   kafka_data:
     driver: local
   invoicing_db_data:
+    driver: local
+  object_storage_data:
     driver: local
 
 networks:
