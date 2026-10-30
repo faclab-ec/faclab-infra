@@ -83,10 +83,12 @@ termina (ADR-0005).
 
 | Tópico | Productor | Consumidores |
 |--------|-----------|--------------|
-| `sales.confirmed` | faclab-core (worker, desde el outbox) | faclab-invoicing |
-| `invoices` | faclab-invoicing | faclab-core (worker) y faclab-invoicing |
+| `sales.confirmed` | faclab-core (worker, desde el outbox) | faclab-invoicing (worker) |
+| `invoices` | faclab-invoicing (worker: solo `InvoiceAuthorized` e `InvoiceRejected`) | faclab-core (worker) |
 | `dlq` | faclab-invoicing (mensajes que no pudo procesar) | — |
 
+- Desde S4.2 faclab-invoicing ya no usa `invoices` para avanzar sus facturas: lo hace una cola en su
+  base de datos, y el tópico solo lleva al core el resultado de cada una.
 - Cada tópico tiene `KAFKA_TOPIC_PARTITIONS` particiones (6 por defecto) y replicación 1 (un solo
   nodo). Los mensajes llevan como clave la empresa (`tenant_id`): los de una empresa van en orden
   por la misma partición y las empresas se reparten entre las demás.
