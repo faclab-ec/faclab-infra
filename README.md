@@ -11,6 +11,7 @@ Infraestructura local compartida para el ecosistema Faclab. Provee los servicios
 | **kafka-topics** | `confluentinc/cp-kafka` | — | Crea los tópicos con varias particiones al arrancar y termina (`scripts/create-topics.sh`) |
 | **invoicing-db** | `postgres:17` | `5434` | Base de datos de faclab-invoicing (`faclab_invoicing` y `faclab_invoicing_test`) |
 | **object-storage** | `dxflrs/garage` | `3900` | Almacenamiento de objetos compatible con S3 (Garage) para las facturas autorizadas de faclab-invoicing |
+| **mailpit** | `axllent/mailpit` | `1025`, `8025` | Servidor de correo de desarrollo: guarda los correos que faclab-invoicing envía a los compradores y no entrega ninguno |
 
 ## Requisitos
 
@@ -65,6 +66,7 @@ networks:
 | Kafka | `kafka:9092` |
 | PostgreSQL de faclab-invoicing | `invoicing-db:5432` |
 | Almacenamiento de objetos (S3) | `http://object-storage:3900` |
+| Correo (SMTP) | `mailpit:1025` |
 
 ### Endpoints externos (desde el host)
 
@@ -74,6 +76,8 @@ networks:
 | Kafka UI | [http://localhost:9091](http://localhost:9091) |
 | PostgreSQL de faclab-invoicing | `localhost:5434` |
 | Almacenamiento de objetos (S3) | `http://localhost:3900` |
+| Correo (SMTP) | `localhost:1025` |
+| Correo (interfaz web de Mailpit) | [http://localhost:8025](http://localhost:8025) |
 
 ## Tópicos de Kafka
 
@@ -169,6 +173,23 @@ Para que los servicios exporten a SigNoz, ver el detalle en el `.env.example` y 
 | faclab-invoicing (contenedor en `faclab_network`) | `OTEL_EXPORTER_OTLP_ENDPOINT=http://signoz-otel-collector:4317` |
 
 Con todo arriba, una venta del POS se ve en SigNoz como una sola traza: el request en faclab-core, `send sales.confirmed`, `process sales.confirmed` en faclab-invoicing, `send invoices` y `process invoices` de vuelta en faclab-core.
+
+## Correo de desarrollo
+
+`mailpit` es [Mailpit](https://mailpit.axllent.org), un servidor SMTP que guarda los mensajes en
+vez de entregarlos (S4.4). faclab-invoicing envía ahí, en local, cada factura autorizada a su
+comprador: el RIDE (PDF) y el XML autorizado como adjuntos. Sus valores locales por defecto ya
+apuntan a él (`SMTP_HOST=localhost`, `SMTP_PORT=1025`); desde un contenedor de `faclab_network`,
+`SMTP_HOST=mailpit`.
+
+| Dato | Valor local |
+|------|-------------|
+| SMTP | `localhost:1025`, sin TLS; acepta cualquier usuario y contraseña |
+| Interfaz web | [http://localhost:8025](http://localhost:8025): los correos recibidos, con sus adjuntos |
+| Límite | Guarda los últimos 500 mensajes (`MP_MAX_MESSAGES`), sin volumen: se pierden al recrear el contenedor |
+
+El proveedor de correo real de cada entorno se configura en faclab-invoicing (`SMTP_*`, decisión
+D-3: cualquier servicio SMTP); se elige al desplegar (S8.1).
 
 ## Variables de entorno
 
