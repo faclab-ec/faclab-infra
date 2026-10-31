@@ -122,6 +122,29 @@ services:
       retries: 10
       start_period: 10s
 
+  # Mail server for development (S4.4): faclab-invoicing sends the invoices of the buyers here.
+  # It keeps every message for its web UI (http://localhost:8025) and delivers none; it accepts any
+  # credentials, so a real provider's settings can be tried without sending anything
+  mailpit:
+    image: axllent/mailpit:${MAILPIT_VERSION:-v1.31.6}
+    container_name: mailpit
+    restart: unless-stopped
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+      MP_MAX_MESSAGES: "500"
+    ports:
+      - "${MAILPIT_SMTP_PORT:-1025}:1025"
+      - "${MAILPIT_UI_PORT:-8025}:8025"
+    networks:
+      - faclab_network
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
 volumes:
   kafka_data:
     driver: local
