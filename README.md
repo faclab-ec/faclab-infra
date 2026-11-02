@@ -89,6 +89,8 @@ termina (ADR-0005).
 |--------|-----------|--------------|
 | `sales.confirmed` | faclab-core (worker, desde el outbox) | faclab-invoicing (worker) |
 | `invoices` | faclab-invoicing (worker: solo `InvoiceAuthorized` e `InvoiceRejected`) | faclab-core (worker) |
+| `credit_notes.requested` | faclab-core (worker, desde el outbox) | faclab-invoicing (worker) |
+| `credit_notes.results` | faclab-invoicing (worker: `CreditNoteAuthorized` y `CreditNoteRejected`) | faclab-core (worker) |
 | `dlq` | faclab-invoicing (mensajes que no pudo procesar) | — |
 
 - Desde S4.2 faclab-invoicing ya no usa `invoices` para avanzar sus facturas: lo hace una cola en su

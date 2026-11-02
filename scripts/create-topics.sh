@@ -15,8 +15,9 @@ BOOTSTRAP="${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}"
 PARTITIONS="${KAFKA_TOPIC_PARTITIONS:-6}"
 REPLICATION="${KAFKA_TOPIC_REPLICATION_FACTOR:-1}"
 # sales.confirmed: core -> invoicing; invoices: invoicing -> core (and invoicing itself);
+# credit_notes.requested: core -> invoicing; credit_notes.results: invoicing -> core;
 # dlq: the messages invoicing couldn't process
-TOPICS=(sales.confirmed invoices dlq)
+TOPICS=(sales.confirmed invoices credit_notes.requested credit_notes.results dlq)
 
 partition_count() {
   kafka-topics --bootstrap-server "$BOOTSTRAP" --describe --topic "$1" |
