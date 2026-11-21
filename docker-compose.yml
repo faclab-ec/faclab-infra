@@ -79,6 +79,8 @@ services:
     environment:
       POSTGRES_PASSWORD: ${INVOICING_DB_SUPERUSER_PASSWORD:-postgres}
       INVOICING_DB_PASSWORD: ${INVOICING_DB_PASSWORD:-faclab_invoicing}
+      # faclab_monitor, the collector's read-only user (S7.4)
+      MONITOR_DB_PASSWORD: ${INVOICING_DB_MONITOR_PASSWORD:-change-me-monitor}
     ports:
       - "${INVOICING_DB_PORT:-5434}:5432"
     volumes:
@@ -145,6 +147,66 @@ services:
       retries: 10
       start_period: 5s
 
+  # OpenTelemetry Collector (S7.4, ADR-0010, observability/otel-collector/config.yaml). The services
+  # export here, never to SigNoz: OTLP gRPC on 4317, the browser's OTLP/HTTP on 4318. It adds host,
+  # container, PostgreSQL, Kafka and health check metrics, deletes sensitive attributes and forwards
+  # to SigNoz (scripts/signoz.sh up locally)
+  collector:
+    image: otel/opentelemetry-collector-contrib:${OTEL_COLLECTOR_VERSION:-0.165.0}
+    container_name: collector
+    restart: unless-stopped
+    # separateSchemaAttr: the postgresql receiver's table metrics carry the schema in its own
+    # attribute (the receiver warns until it is on)
+    command:
+      - --config=/etc/otelcol-contrib/config.yaml
+      - --feature-gates=receiver.postgresql.separateSchemaAttr
+    environment:
+      # Docker API through the read-only proxy (docker_stats and the docker resource detector)
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+      OTEL_RESOURCE_ATTRIBUTES: deployment.environment.name=${COLLECTOR_ENVIRONMENT:-local}
+      SIGNOZ_OTLP_ENDPOINT: ${SIGNOZ_OTLP_ENDPOINT:-signoz-otel-collector:4317}
+      SIGNOZ_OTLP_INSECURE: ${SIGNOZ_OTLP_INSECURE:-true}
+      # faclab_monitor of each PostgreSQL: core's comes from its `make db-roles` (DATABASE_URL_MONITOR)
+      CORE_DB_MONITOR_PASSWORD: ${CORE_DB_MONITOR_PASSWORD:-change-me-monitor}
+      INVOICING_DB_MONITOR_PASSWORD: ${INVOICING_DB_MONITOR_PASSWORD:-change-me-monitor}
+      CORE_HEALTH_URL: ${CORE_HEALTH_URL:-http://api:3000/health/ready}
+      INVOICING_HEALTH_URL: ${INVOICING_HEALTH_URL:-http://host.docker.internal:3173/health}
+    ports:
+      - "${OTEL_GRPC_PORT:-4317}:4317"
+      - "${OTEL_HTTP_PORT:-4318}:4318"
+    volumes:
+      - "./observability/otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro"
+      # The host's root, read-only, for host_metrics
+      - "/:/hostfs:ro"
+    extra_hosts:
+      # faclab-invoicing runs on the host locally (npm run dev)
+      - "host.docker.internal:host-gateway"
+    mem_limit: 512m
+    depends_on:
+      - docker-socket-proxy
+    networks:
+      - faclab_network
+      - docker_api
+
+  # The only container with the Docker socket. A socket mounted `:ro` still accepts every API call,
+  # so the collector reaches Docker through this proxy, which lets through GET of containers, events,
+  # version, info and ping and refuses everything else (POST=0). It isn't on faclab_network
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:${DOCKER_SOCKET_PROXY_VERSION:-v0.5.0}
+    container_name: docker-socket-proxy
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      INFO: 1
+      EVENTS: 1
+      VERSION: 1
+      PING: 1
+      POST: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - docker_api
+
 volumes:
   kafka_data:
     driver: local
@@ -157,3 +219,6 @@ networks:
   faclab_network:
     name: faclab_network
     driver: bridge
+  # Only the collector and the Docker socket proxy; no route outside
+  docker_api:
+    internal: true
