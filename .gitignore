@@ -7,3 +7,9 @@
 observability/signoz/pours/
 observability/signoz/casting.yaml.lock
 __pycache__/
+
+# Secrets of the production stack (deploy/production): they live encrypted outside the repository
+secrets.env
+*.sops.yaml
+.sops.yaml
+*.pem

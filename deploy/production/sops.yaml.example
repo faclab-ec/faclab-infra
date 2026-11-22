@@ -1,0 +1,9 @@
+# Copy it as .sops.yaml into the folder of the encrypted secrets ($FACLAB_SECRETS_DIR), never into
+# this repository, and list the age public key of each person who may decrypt them (age-keygen -y
+# <private key file> prints it). Adding or removing one: edit it here and run
+#   sops updatekeys <environment>.sops.yaml
+creation_rules:
+  - path_regex: \.sops\.yaml$
+    age: >-
+      age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq,
+      age1zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
