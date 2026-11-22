@@ -17,7 +17,7 @@ jobs:
   validate:
     name: validate
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 
@@ -30,6 +30,12 @@ jobs:
         run: >-
           docker compose --env-file .env.example run --rm --no-deps collector
           validate --config=/etc/otelcol-contrib/config.yaml
+
+      # The Collector with its real processors and a file exporter: sensitive keys sent in
+      # resources, spans, span events, metric points and logs must not reach the file, and the
+      # browser's receiver only takes faclab-web (S7.6)
+      - name: Check the Collector's redaction
+        run: python3 scripts/collector-redaction-test.py
 
       - name: ShellCheck
         run: shellcheck scripts/*.sh

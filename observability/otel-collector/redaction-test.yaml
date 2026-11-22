@@ -1,0 +1,31 @@
+# Overlay of config.yaml for scripts/collector-redaction-test.py (S7.6): the Collector merges it over
+# config.yaml (a second --config; maps merge, lists are replaced). It only swaps what goes in and out:
+# the services' receiver also takes OTLP/HTTP, so the test sends with the standard library, and every
+# pipeline writes to a file instead of SigNoz. The processors of each pipeline are config.yaml's, so
+# a pipeline without transform/redact (or filter/browser) fails the test.
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4320
+
+exporters:
+  file/redaction:
+    path: /out/telemetry.jsonl
+    flush_interval: 100ms
+
+service:
+  pipelines:
+    traces:
+      exporters: [file/redaction]
+    # Without host, Docker, PostgreSQL, Kafka nor health checks: only what the test sends
+    metrics:
+      receivers: [otlp]
+      exporters: [file/redaction]
+    logs:
+      exporters: [file/redaction]
+    traces/browser:
+      exporters: [file/redaction]
+    metrics/browser:
+      exporters: [file/redaction]
