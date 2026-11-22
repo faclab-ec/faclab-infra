@@ -7,6 +7,9 @@
 #   secrets.sh init <environment>               generate every secret, encrypted (fails if it exists)
 #   secrets.sh edit <environment>               open it decrypted in $EDITOR (sops edit)
 #   secrets.sh names <environment>              list the variables, without their values
+#   secrets.sh set <environment> <name> [kind]  replace one secret, without an editor: a new value
+#                                               of that kind (see generate) or, without a kind,
+#                                               the value read from stdin
 #   secrets.sh push <environment> <ssh target>  copy them decrypted to ~/.faclab-incoming on the
 #                                               server, over SSH and without touching the local disk;
 #                                               then: sudo stack.sh install-secrets <environment>
@@ -124,6 +127,31 @@ edit() {
   (cd "$(secrets_dir)" && sops edit "$file")
 }
 
+set_value() {
+  local environment="${1:?usage: secrets.sh set <environment> <name> [kind]}"
+  local name="${2:?usage: secrets.sh set <environment> <name> [kind]}"
+  local kind="${3:-}" file index value
+  file="$(existing_file "$environment")"
+  case "$name" in
+    postgres_password | jwt_private_key.pem | secret_encryption_keys) index="[\"files\"][\"$name\"]" ;;
+    *) index="[\"env\"][\"$name\"]" ;;
+  esac
+  # Only names that exist: a typo would add a secret nobody reads
+  sops decrypt --extract "$index" "$file" > /dev/null 2>&1 || die "$name isn't a secret of $environment (secrets.sh names $environment)"
+  if [ -n "$kind" ]; then
+    value="$(generate "$kind")"
+  else
+    value="$(cat)"
+  fi
+  [ -n "$value" ] || [ "$name" = SMTP_USER ] || [ "$name" = SMTP_PASSWORD ] || die "empty value for $name"
+  # The PEM keeps its final line break, as init writes it
+  [ "$name" != jwt_private_key.pem ] || value+=$'\n'
+  # sops reads it from stdin as JSON: never in a command line
+  printf '%s' "$value" | python3 -c 'import json, sys; sys.stdout.write(json.dumps(sys.stdin.read()))' |
+    (cd "$(secrets_dir)" && sops set --value-stdin "$file" "$index")
+  echo "$name of $environment replaced. Next: secrets.sh push, then stack.sh install-secrets on the server."
+}
+
 names() {
   local file
   file="$(existing_file "${1:?usage: secrets.sh names <environment>}")"
@@ -159,7 +187,7 @@ push() {
 main() {
   local command="${1:-}"
   [ -n "$command" ] || {
-    sed -n '2,20p' "${BASH_SOURCE[0]}"
+    sed -n '2,24p' "${BASH_SOURCE[0]}"
     exit 1
   }
   shift
@@ -167,6 +195,7 @@ main() {
     init) init "$@" ;;
     edit) edit "$@" ;;
     names) names "$@" ;;
+    set) set_value "$@" ;;
     push) push "$@" ;;
     generate) generate "$@" ;;
     *) die "unknown command: $command" ;;

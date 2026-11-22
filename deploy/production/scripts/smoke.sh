@@ -61,6 +61,25 @@ header() {
   fi
 }
 
+# served_by <description> <url> core|invoicing: both answer 403 PERMISSION_DENIED without a token;
+# Starlette (core) sends JSON as application/json and Fastify (invoicing) adds charset=utf-8, which
+# tells which one Caddy routed the request to
+served_by() {
+  local headers status content_type
+  headers="$("${CURL[@]}" -o /dev/null -D - "$2" | tr -d '\r' || true)"
+  status="$(printf '%s\n' "$headers" | sed -n 's/^HTTP[^ ]* \([0-9]*\).*/\1/p' | tail -n 1)"
+  content_type="$(printf '%s\n' "$headers" | grep -i '^content-type:' | tail -n 1)"
+  if [ "$status" != 403 ]; then
+    fail "$1: expected 403 without a token, got ${status:-nothing}"
+  elif [ "$3" = invoicing ] && [[ "$content_type" == *charset=utf-8* ]]; then
+    pass "$1 (403, invoicing)"
+  elif [ "$3" = core ] && [[ "$content_type" != *charset=utf-8* ]]; then
+    pass "$1 (403, core)"
+  else
+    fail "$1: answered by the wrong service ($content_type)"
+  fi
+}
+
 # A body of <size> bytes for POST tests
 body_of() {
   head -c "$1" /dev/zero | tr '\0' 'a'
@@ -103,10 +122,12 @@ if [[ "$jwks" == *'"kty":"OKP"'* ]]; then
 else
   fail "JWKS doesn't publish an Ed25519 key"
 fi
-check "core: /api/auth/me without a token" 401 "https://$API/api/auth/me"
+served_by "/api/auth/me without a token" "https://$API/api/auth/me" core
+served_by "/api/v1/products without a token" "https://$API/api/v1/products" core
+served_by "/api/invoicing/status without a token" "https://$API/api/invoicing/status" invoicing
+served_by "/api/v1/invoices without a token" "https://$API/api/v1/invoices" invoicing
+served_by "/api/company-config without a token" "https://$API/api/company-config" invoicing
 check "core: the public OpenAPI" 200 "https://$API/openapi/public.json"
-check "invoicing: /api/invoicing/status without a token" 401 "https://$API/api/invoicing/status"
-check "invoicing: /api/v1/invoices without a token" 401 "https://$API/api/v1/invoices"
 check "readiness isn't public" 404 "https://$API/health/ready"
 header "HSTS" "https://$API/.well-known/jwks.json" Strict-Transport-Security "max-age="
 check "a body over 2 MiB is refused" 413 -X POST -H 'Content-Type: application/json' \
