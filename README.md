@@ -45,7 +45,8 @@ faclab-infra/
 │   └── garage.toml             # Configuracion de Garage (un nodo, sin replicacion)
 ├── observability/
 │   ├── otel-collector/
-│   │   └── config.yaml            # Configuración del OTel Collector (receptores, redacción, envío a SigNoz)
+│   │   ├── config.yaml            # Configuración del OTel Collector (receptores, redacción, envío a SigNoz)
+│   │   └── redaction-test.yaml    # Capa de la prueba de redacción: OTLP/HTTP y envío a un archivo (S7.6)
 │   ├── runbooks/                  # Un runbook por alerta (síntoma, diagnóstico, acción, escalamiento)
 │   └── signoz/
 │       ├── casting.yaml           # SigNoz local con Foundry: versiones, SMTP, red y puertos
@@ -53,6 +54,7 @@ faclab-infra/
 │       ├── alerts/                # Las alertas (reglas v2alpha1), con su runbook
 │       └── pruebas-de-alertas.md  # Cómo se provocó cada alerta y la evidencia
 ├── scripts/
+│   ├── collector-redaction-test.py # Prueba que el Collector borra las claves sensibles (CI)
 │   ├── create-topics.sh        # Crea los tópicos de Kafka con varias particiones
 │   ├── init-invoicing-db.sh    # Crea el rol y las bases de faclab-invoicing
 │   ├── signoz.sh               # SigNoz local (up, down, status, config) y dashboards y alertas (check, sync, verify)
@@ -205,7 +207,21 @@ Procesadores, en este orden:
 docker compose up -d collector                  # con docker-socket-proxy
 docker compose logs -f collector
 docker compose run --rm --no-deps collector validate --config=/etc/otelcol-contrib/config.yaml
+python3 scripts/collector-redaction-test.py     # prueba de la redacción (también en CI)
 ```
+
+**Prueba de la redacción (S7.6).** `scripts/collector-redaction-test.py` levanta el servicio
+`collector` con su imagen y `config.yaml`, más `observability/otel-collector/redaction-test.yaml`, que
+solo agrega OTLP/HTTP al receptor de los servicios y cambia el envío a SigNoz por un archivo; los
+procesadores de cada tubería son los reales.
+
+- Envía un span con un evento, una métrica y un log con claves sensibles en cada nivel (`password`,
+  `db.password`, `http.request.header.authorization`, `x-csrf-token`, `Set-Cookie`…), y otras parecidas
+  que deben quedar (`auth.passwordless`, `faclab.token_count`).
+- También envía por el receptor del navegador un span de `faclab-web` y otro de otro servicio.
+- Falla si una clave o un valor sensible llega al archivo, si falta una clave que debe quedar o si
+  pasa el span ajeno. Quitar `transform/redact` (o `filter/browser`) de una tubería la hace fallar.
+- Usa `.env.example`, nunca `.env`, y solo la biblioteca estándar de Python.
 
 Los receptores que no encuentran su fuente (el core apagado, Kafka sin levantar) registran un error en
 cada intento y siguen; no detienen al Collector. Sin SigNoz, el Collector guarda en su cola lo que no
