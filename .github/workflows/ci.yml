@@ -24,6 +24,13 @@ jobs:
       - name: Validate docker-compose.yml
         run: docker compose --env-file .env.example config -q
 
+      # observability/otel-collector/config.yaml against the pinned image, with the service's
+      # volumes and environment (S7.4)
+      - name: Validate the OTel Collector configuration
+        run: >-
+          docker compose --env-file .env.example run --rm --no-deps collector
+          validate --config=/etc/otelcol-contrib/config.yaml
+
       - name: ShellCheck
         run: shellcheck scripts/*.sh
 

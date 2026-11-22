@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # SigNoz local for the Faclab services: SigNoz's own Docker Compose plus
-# observability/docker-compose.signoz.yml, which joins its OTel collector to faclab_network.
+# observability/docker-compose.signoz.yml, which joins its OTel collector to faclab_network and takes
+# its ports off the host. The services export to the Faclab collector (docker-compose.yml, S7.4),
+# which forwards to SigNoz.
 #
 #   scripts/signoz.sh up       start SigNoz (clones it first when SIGNOZ_DIR doesn't exist)
 #   scripts/signoz.sh down     stop it; the data volumes stay
@@ -35,8 +37,8 @@ compose() {
     "$@"
 }
 
-# Until its first admin account exists, SigNoz gives the collector no pipelines and nothing
-# listens on 4317/4318 ("cannot create agent without orgId")
+# Until its first admin account exists, SigNoz gives its collector no pipelines and it accepts
+# nothing from the Faclab collector ("cannot create agent without orgId")
 setup_reminder() {
   local version=""
   for _ in $(seq 1 30); do
@@ -45,15 +47,17 @@ setup_reminder() {
   done
   if [[ "$version" == *'"setupCompleted":false'* ]]; then
     echo "First run: create the admin account at http://localhost:8080;" \
-      "until then the collector accepts no data."
+      "until then SigNoz accepts no data."
   fi
 }
 
 endpoints() {
   cat <<EOF
 SigNoz UI: http://localhost:8080
-OTLP from the host: http://localhost:4317 (gRPC), http://localhost:4318 (HTTP)
-OTLP from containers on faclab_network: http://signoz-otel-collector:4317
+The services export to the Faclab collector (docker compose up -d collector):
+  from the host: http://localhost:4317 (gRPC), http://localhost:4318 (browser, OTLP/HTTP)
+  from containers on faclab_network: http://collector:4317
+It forwards to SigNoz at signoz-otel-collector:4317 (faclab_network only).
 EOF
 }
 

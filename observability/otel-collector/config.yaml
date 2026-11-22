@@ -1,0 +1,178 @@
+# OpenTelemetry Collector of Faclab (S7.4, ADR-0010): the services export here and never to SigNoz.
+# It receives OTLP from the services and from the browser, adds host, container, PostgreSQL, Kafka and
+# health check metrics, deletes sensitive attributes and forwards everything to SigNoz over OTLP gRPC.
+#
+# Values come from the environment (docker-compose.yml, .env.example); ${env:X:-default} keeps a
+# development default.
+
+receivers:
+  # Services (faclab-core API and worker, faclab-invoicing API and worker): OTLP gRPC
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+  # The browser (faclab-web), through the /otlp route of its own origin (Vite locally, Caddy in
+  # production): OTLP/HTTP with a size limit. Its pipelines only take traces and metrics, and only of
+  # service.name=faclab-web (filter/browser)
+  otlp/browser:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+        max_request_body_size: 1048576
+
+  # The host, read through its root mounted read-only at /hostfs. Without include_virtual_filesystems
+  # the filesystem scraper finds nothing under OrbStack; the exclusions drop the virtual ones (and
+  # the Mac folders that OrbStack shares, virtiofs)
+  host_metrics:
+    root_path: /hostfs
+    collection_interval: 30s
+    scrapers:
+      cpu:
+      load:
+      memory:
+      paging:
+      disk:
+      network:
+      filesystem:
+        include_virtual_filesystems: true
+        exclude_fs_types:
+          match_type: regexp
+          fs_types: ["^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fuse.*|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs|tmpfs|virtiofs)$"]
+        exclude_mount_points:
+          match_type: regexp
+          # /Users and /mnt/machines: OrbStack's view of the Mac and of each Docker volume
+          mount_points: ["^/(dev|proc|sys|run|snap|Users)(/.*)?$", "^/var/lib/docker/.*", "^/mnt/machines/.*",
+            ".*/docker/volumes/.*"]
+
+  # Containers, through the read-only proxy of the Docker socket (only GET of containers, events,
+  # version and info)
+  docker_stats:
+    endpoint: ${env:DOCKER_HOST:-tcp://docker-socket-proxy:2375}
+    collection_interval: 30s
+
+  # PostgreSQL of faclab-core and of faclab-invoicing, as faclab_monitor (pg_monitor: statistics,
+  # never table rows). Every database of each server; server.address tells them apart. Locks and
+  # deadlocks are optional metrics, on for the infrastructure dashboard (S7.5). The query samples
+  # (which carry SQL text) stay off, as by default
+  postgresql/core:
+    endpoint: ${env:CORE_DB_ENDPOINT:-db:5432}
+    transport: tcp
+    username: faclab_monitor
+    password: ${env:CORE_DB_MONITOR_PASSWORD}
+    collection_interval: 60s
+    tls:
+      insecure: ${env:POSTGRES_MONITOR_TLS_INSECURE:-true}
+    metrics: &postgresql_optional_metrics
+      postgresql.database.locks:
+        enabled: true
+      postgresql.deadlocks:
+        enabled: true
+  postgresql/invoicing:
+    endpoint: ${env:INVOICING_DB_ENDPOINT:-invoicing-db:5432}
+    transport: tcp
+    username: faclab_monitor
+    password: ${env:INVOICING_DB_MONITOR_PASSWORD}
+    collection_interval: 60s
+    tls:
+      insecure: ${env:POSTGRES_MONITOR_TLS_INSECURE:-true}
+    metrics: *postgresql_optional_metrics
+
+  # Kafka: brokers, topics and the lag of each consumer group (kafka.consumer_group.lag)
+  kafka_metrics:
+    brokers: ["${env:KAFKA_BROKERS:-kafka:9092}"]
+    scrapers: [brokers, topics, consumers]
+    collection_interval: 30s
+
+  # Readiness of the APIs (httpcheck.status, httpcheck.duration)
+  http_check:
+    collection_interval: 30s
+    targets:
+      - endpoint: ${env:CORE_HEALTH_URL:-http://api:3000/health/ready}
+      - endpoint: ${env:INVOICING_HEALTH_URL:-http://host.docker.internal:3173/health}
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+
+  batch:
+
+  # host.name and os.type of the Docker host (through the proxy) and deployment.environment.name of
+  # OTEL_RESOURCE_ATTRIBUTES; what a service already sets is kept
+  resource_detection:
+    detectors: [env, docker]
+    override: false
+
+  # Deletes sensitive keys at any level (OBSERVABILITY.md §4.6, the same list as faclab-core's
+  # is_sensitive_key), also behind a prefix: http.request.header.authorization, x-csrf-token.
+  # Keep the seven patterns identical
+  transform/redact:
+    error_mode: ignore
+    trace_statements:
+      - context: resource
+        statements:
+          - delete_matching_keys(resource.attributes, "(?i)^(.*[._-])?(password|current[_-]?password|new[_-]?password|secret|jwt[_-]?secret|client[_-]?secret|secret[_-]?hash|token|access[_-]?token|refresh[_-]?token|authorization|cookie|set[_-]?cookie|api[_-]?key|p12|certificate|private[_-]?key|xml|signature)$")
+      - context: span
+        statements:
+          - delete_matching_keys(span.attributes, "(?i)^(.*[._-])?(password|current[_-]?password|new[_-]?password|secret|jwt[_-]?secret|client[_-]?secret|secret[_-]?hash|token|access[_-]?token|refresh[_-]?token|authorization|cookie|set[_-]?cookie|api[_-]?key|p12|certificate|private[_-]?key|xml|signature)$")
+      - context: spanevent
+        statements:
+          - delete_matching_keys(spanevent.attributes, "(?i)^(.*[._-])?(password|current[_-]?password|new[_-]?password|secret|jwt[_-]?secret|client[_-]?secret|secret[_-]?hash|token|access[_-]?token|refresh[_-]?token|authorization|cookie|set[_-]?cookie|api[_-]?key|p12|certificate|private[_-]?key|xml|signature)$")
+    metric_statements:
+      - context: resource
+        statements:
+          - delete_matching_keys(resource.attributes, "(?i)^(.*[._-])?(password|current[_-]?password|new[_-]?password|secret|jwt[_-]?secret|client[_-]?secret|secret[_-]?hash|token|access[_-]?token|refresh[_-]?token|authorization|cookie|set[_-]?cookie|api[_-]?key|p12|certificate|private[_-]?key|xml|signature)$")
+      - context: datapoint
+        statements:
+          - delete_matching_keys(datapoint.attributes, "(?i)^(.*[._-])?(password|current[_-]?password|new[_-]?password|secret|jwt[_-]?secret|client[_-]?secret|secret[_-]?hash|token|access[_-]?token|refresh[_-]?token|authorization|cookie|set[_-]?cookie|api[_-]?key|p12|certificate|private[_-]?key|xml|signature)$")
+    log_statements:
+      - context: resource
+        statements:
+          - delete_matching_keys(resource.attributes, "(?i)^(.*[._-])?(password|current[_-]?password|new[_-]?password|secret|jwt[_-]?secret|client[_-]?secret|secret[_-]?hash|token|access[_-]?token|refresh[_-]?token|authorization|cookie|set[_-]?cookie|api[_-]?key|p12|certificate|private[_-]?key|xml|signature)$")
+      - context: log
+        statements:
+          - delete_matching_keys(log.attributes, "(?i)^(.*[._-])?(password|current[_-]?password|new[_-]?password|secret|jwt[_-]?secret|client[_-]?secret|secret[_-]?hash|token|access[_-]?token|refresh[_-]?token|authorization|cookie|set[_-]?cookie|api[_-]?key|p12|certificate|private[_-]?key|xml|signature)$")
+
+  # What enters by the browser's receiver must be faclab-web's: anything else is dropped
+  filter/browser:
+    error_mode: ignore
+    traces:
+      span:
+        - resource.attributes["service.name"] != "faclab-web"
+    metrics:
+      metric:
+        - resource.attributes["service.name"] != "faclab-web"
+
+exporters:
+  # SigNoz: locally its collector on faclab_network, plain text; TLS (SIGNOZ_OTLP_INSECURE=false) on
+  # any other environment
+  otlp_grpc/signoz:
+    endpoint: ${env:SIGNOZ_OTLP_ENDPOINT:-signoz-otel-collector:4317}
+    tls:
+      insecure: ${env:SIGNOZ_OTLP_INSECURE:-true}
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource_detection, transform/redact, batch]
+      exporters: [otlp_grpc/signoz]
+    metrics:
+      receivers: [otlp, host_metrics, docker_stats, postgresql/core, postgresql/invoicing, kafka_metrics,
+        http_check]
+      processors: [memory_limiter, resource_detection, transform/redact, batch]
+      exporters: [otlp_grpc/signoz]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resource_detection, transform/redact, batch]
+      exporters: [otlp_grpc/signoz]
+    traces/browser:
+      receivers: [otlp/browser]
+      processors: [memory_limiter, filter/browser, transform/redact, batch]
+      exporters: [otlp_grpc/signoz]
+    metrics/browser:
+      receivers: [otlp/browser]
+      processors: [memory_limiter, filter/browser, transform/redact, batch]
+      exporters: [otlp_grpc/signoz]
