@@ -11,7 +11,10 @@
 #   rules for published ports, before ufw's: what keeps the rest closed is that only caddy
 #   publishes ports (nmap checks it);
 # - automatic security updates (unattended-upgrades), without automatic reboots;
-# - Docker Engine and the compose plugin from Docker's apt repository, with rotated logs;
+# - Docker Engine and the compose plugin from Docker's apt repository, with rotated logs and a
+#   mirror of Docker Hub (DOCKER_REGISTRY_MIRROR, mirror.gcr.io by default; empty: none). Docker Hub
+#   gives an IP without login 10 pulls an hour, and the first installation needs about a dozen;
+#   what the mirror lacks still comes from Docker Hub;
 # - UDP buffers for HTTP/3 (quic-go asks for 7.5 MB);
 # - /opt/faclab for the checkout of faclab-infra, owned by the deploy user, and /etc/faclab for
 #   the secrets, root's.
@@ -21,6 +24,7 @@ set -euo pipefail
 
 DEPLOY_USER="${1:?usage: provision-vps.sh <deploy user> <SSH public key or file>}"
 KEY_ARG="${2:?usage: provision-vps.sh <deploy user> <SSH public key or file>}"
+REGISTRY_MIRROR="${DOCKER_REGISTRY_MIRROR-https://mirror.gcr.io}"
 
 die() {
   echo "provision-vps.sh: $*" >&2
@@ -108,13 +112,18 @@ if ! command -v docker > /dev/null 2>&1; then
   apt-get update -q
   apt-get install -yq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 fi
-# Rotated logs for every container; live-restore keeps them running while the daemon updates
+# Rotated logs for every container; live-restore keeps them running while the daemon updates. An
+# existing daemon.json is never touched
 if [ ! -f /etc/docker/daemon.json ]; then
-  cat > /etc/docker/daemon.json << 'EOF'
+  mirrors=""
+  if [ -n "$REGISTRY_MIRROR" ]; then
+    mirrors="$(printf ',\n  "registry-mirrors": ["%s"]' "$REGISTRY_MIRROR")"
+  fi
+  cat > /etc/docker/daemon.json << EOF
 {
   "log-driver": "json-file",
   "log-opts": { "max-size": "10m", "max-file": "5" },
-  "live-restore": true
+  "live-restore": true$mirrors
 }
 EOF
   systemctl restart docker
