@@ -1,0 +1,1554 @@
+{
+  "schemaVersion": "v6",
+  "name": "faclab-ecosistema",
+  "tags": [
+    {
+      "key": "faclab",
+      "value": "observabilidad"
+    }
+  ],
+  "spec": {
+    "display": {
+      "name": "Faclab · Ecosistema",
+      "description": "¿Está sano el sistema ahora? Disponibilidad, errores, latencia, colas y navegador."
+    },
+    "variables": [
+      {
+        "kind": "ListVariable",
+        "spec": {
+          "name": "env",
+          "display": {
+            "name": "Entorno",
+            "description": ""
+          },
+          "allowMultiple": true,
+          "allowAllValue": true,
+          "sort": "alphabetical-asc",
+          "plugin": {
+            "kind": "signoz/DynamicVariable",
+            "spec": {
+              "name": "deployment.environment.name",
+              "signal": "metrics"
+            }
+          }
+        }
+      }
+    ],
+    "panels": {
+      "intro": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Cómo usar este dashboard",
+            "description": ""
+          },
+          "plugin": {
+            "kind": "signoz/TextPanel",
+            "spec": {
+              "mode": "markdown",
+              "text": "Vista de un vistazo de Faclab (core, facturación, colas y navegador). Rojo en un panel significa que hay que abrir el dashboard específico: *Faclab · API Core*, *Faclab · Kafka y mensajería*, *Faclab · Facturación electrónica*, *Faclab · Base de datos e infraestructura* o *Faclab · Calidad de operaciones*. Cada panel dice en su descripción su consulta, su unidad, su umbral y qué hacer.\n\n- [Runbooks de las alertas](https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/README.md)",
+              "presentation": {
+                "textAlign": "left",
+                "verticalAlign": "top"
+              },
+              "headerOptions": {
+                "hide": false
+              }
+            }
+          },
+          "queries": [],
+          "links": []
+        }
+      },
+      "availability": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Disponibilidad",
+            "description": "Consulta: httpcheck.status con http.status_class = 2xx, el mínimo de cada chequeo del Collector (/health/ready del core, /health de la facturación). Unidad: 1 = responde, 0 = no responde. Umbral: menor que 1 es rojo; la alerta servicio-no-disponible avisa tras 2 min. Acción: revisar el contenedor y sus logs de arranque (runbook servicio-no-disponible)"
+          },
+          "plugin": {
+            "kind": "signoz/TablePanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              },
+              "formatting": {
+                "columnUnits": {},
+                "decimalPrecision": "2"
+              },
+              "thresholds": [
+                {
+                  "columnName": "A",
+                  "value": 1,
+                  "operator": "below",
+                  "unit": "",
+                  "color": "#F1575F",
+                  "format": "background"
+                }
+              ]
+            }
+          },
+          "queries": [
+            {
+              "kind": "scalar",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "metrics",
+                    "source": "",
+                    "stepInterval": 60,
+                    "aggregations": [
+                      {
+                        "metricName": "httpcheck.status",
+                        "temporality": "",
+                        "timeAggregation": "avg",
+                        "spaceAggregation": "min",
+                        "reduceTo": "last"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment.name IN $env AND http.status_class = '2xx'"
+                    },
+                    "groupBy": [
+                      {
+                        "name": "http.url",
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string"
+                      }
+                    ],
+                    "order": [],
+                    "having": {
+                      "expression": ""
+                    },
+                    "functions": [],
+                    "legend": "{{http.url}}"
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
+      },
+      "core-5xx": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "5xx del core",
+            "description": "Consulta: http.server.request.duration.count de faclab-core con status 5xx sobre el total × 100. Unidad: porcentaje. Umbral: naranja > 2 %, rojo > 5 %. Acción: abrir Faclab · API Core y sus trazas con error"
+          },
+          "plugin": {
+            "kind": "signoz/NumberPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              },
+              "formatting": {
+                "unit": "percent",
+                "decimalPrecision": "2"
+              },
+              "thresholds": [
+                {
+                  "value": 2,
+                  "operator": "above",
+                  "unit": "percent",
+                  "color": "#FFA940",
+                  "format": "background"
+                },
+                {
+                  "value": 5,
+                  "operator": "above",
+                  "unit": "percent",
+                  "color": "#F1575F",
+                  "format": "background"
+                }
+              ]
+            }
+          },
+          "queries": [
+            {
+              "kind": "scalar",
+              "spec": {
+                "name": "composite",
+                "plugin": {
+                  "kind": "signoz/CompositeQuery",
+                  "spec": {
+                    "queries": [
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "A",
+                          "signal": "metrics",
+                          "source": "",
+                          "stepInterval": 60,
+                          "aggregations": [
+                            {
+                              "metricName": "http.server.request.duration.count",
+                              "temporality": "",
+                              "timeAggregation": "increase",
+                              "spaceAggregation": "sum",
+                              "reduceTo": "sum"
+                            }
+                          ],
+                          "disabled": true,
+                          "filter": {
+                            "expression": "deployment.environment.name IN $env AND service.name = 'faclab-core' AND http.response.status_code LIKE '5%'"
+                          },
+                          "groupBy": [],
+                          "order": [],
+                          "having": {
+                            "expression": ""
+                          },
+                          "functions": [],
+                          "legend": ""
+                        }
+                      },
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "B",
+                          "signal": "metrics",
+                          "source": "",
+                          "stepInterval": 60,
+                          "aggregations": [
+                            {
+                              "metricName": "http.server.request.duration.count",
+                              "temporality": "",
+                              "timeAggregation": "increase",
+                              "spaceAggregation": "sum",
+                              "reduceTo": "sum"
+                            }
+                          ],
+                          "disabled": true,
+                          "filter": {
+                            "expression": "deployment.environment.name IN $env AND service.name = 'faclab-core'"
+                          },
+                          "groupBy": [],
+                          "order": [],
+                          "having": {
+                            "expression": ""
+                          },
+                          "functions": [],
+                          "legend": ""
+                        }
+                      },
+                      {
+                        "type": "builder_formula",
+                        "spec": {
+                          "name": "F1",
+                          "expression": "A / B * 100",
+                          "disabled": false,
+                          "legend": ""
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
+      },
+      "outbox-age": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Outbox: el más antiguo",
+            "description": "Consulta: faclab.outbox.oldest_age, el máximo de todos los tópicos. Unidad: segundos. Umbral: naranja > 5 min, rojo > 15 min. Acción: revisar el worker del core y Kafka (runbook outbox-atascado)"
+          },
+          "plugin": {
+            "kind": "signoz/NumberPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              },
+              "formatting": {
+                "unit": "s",
+                "decimalPrecision": "2"
+              },
+              "thresholds": [
+                {
+                  "value": 300,
+                  "operator": "above",
+                  "unit": "s",
+                  "color": "#FFA940",
+                  "format": "background"
+                },
+                {
+                  "value": 900,
+                  "operator": "above",
+                  "unit": "s",
+                  "color": "#F1575F",
+                  "format": "background"
+                }
+              ]
+            }
+          },
+          "queries": [
+            {
+              "kind": "scalar",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "metrics",
+                    "source": "",
+                    "stepInterval": 60,
+                    "aggregations": [
+                      {
+                        "metricName": "faclab.outbox.oldest_age",
+                        "temporality": "",
+                        "timeAggregation": "latest",
+                        "spaceAggregation": "max",
+                        "reduceTo": "last"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment.name IN $env"
+                    },
+                    "groupBy": [],
+                    "order": [],
+                    "having": {
+                      "expression": ""
+                    },
+                    "functions": [],
+                    "legend": ""
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
+      },
+      "invoices-pending": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Comprobantes pendientes",
+            "description": "Consulta: faclab.invoices.pending, la suma de todos los estados no finales. Unidad: comprobantes. Umbral: informativo; la alerta facturas-atascadas mira su edad. Acción: abrir Faclab · Facturación electrónica"
+          },
+          "plugin": {
+            "kind": "signoz/NumberPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              },
+              "formatting": {
+                "unit": "",
+                "decimalPrecision": "0"
+              },
+              "thresholds": []
+            }
+          },
+          "queries": [
+            {
+              "kind": "scalar",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "metrics",
+                    "source": "",
+                    "stepInterval": 60,
+                    "aggregations": [
+                      {
+                        "metricName": "faclab.invoices.pending",
+                        "temporality": "",
+                        "timeAggregation": "latest",
+                        "spaceAggregation": "sum",
+                        "reduceTo": "last"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment.name IN $env"
+                    },
+                    "groupBy": [],
+                    "order": [],
+                    "having": {
+                      "expression": ""
+                    },
+                    "functions": [],
+                    "legend": ""
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
+      },
+      "failed-messages": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Dead letters pendientes",
+            "description": "Consulta: faclab.dead_letters.pending del core y de la facturación. Unidad: mensajes. Umbral: rojo > 0. Acción: listarlos y reprocesarlos (runbook mensajes-fallidos)"
+          },
+          "plugin": {
+            "kind": "signoz/NumberPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time"
+              },
+              "formatting": {
+                "unit": "",
+                "decimalPrecision": "0"
+              },
+              "thresholds": [
+                {
+                  "value": 0,
+                  "operator": "above",
+                  "unit": "",
+                  "color": "#F1575F",
+                  "format": "background"
+                }
+              ]
+            }
+          },
+          "queries": [
+            {
+              "kind": "scalar",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "metrics",
+                    "source": "",
+                    "stepInterval": 60,
+                    "aggregations": [
+                      {
+                        "metricName": "faclab.dead_letters.pending",
+                        "temporality": "",
+                        "timeAggregation": "latest",
+                        "spaceAggregation": "sum",
+                        "reduceTo": "last"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment.name IN $env"
+                    },
+                    "groupBy": [],
+                    "order": [],
+                    "having": {
+                      "expression": ""
+                    },
+                    "functions": [],
+                    "legend": ""
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
+      },
+      "error-rate": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Tasa de 5xx por servicio",
+            "description": "Consulta: 5xx sobre el total × 100: http.server.request.duration.count del core, http.server.duration.count (convención antigua) de la facturación. Unidad: porcentaje. Umbral: 2 % advertencia, 5 % crítica (alertas errores-5xx-*). Acción: ver las trazas con error del servicio"
+          },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "fillSpans": false
+              },
+              "formatting": {
+                "unit": "percent",
+                "decimalPrecision": "2"
+              },
+              "chartAppearance": {
+                "lineInterpolation": "spline",
+                "showPoints": false,
+                "lineStyle": "solid",
+                "fillMode": "none",
+                "spanGaps": {
+                  "fillOnlyBelow": false,
+                  "fillLessThan": ""
+                }
+              },
+              "axes": {
+                "softMin": 0.0,
+                "softMax": null,
+                "isLogScale": false
+              },
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "customColors": {}
+              },
+              "thresholds": [
+                {
+                  "value": 2,
+                  "unit": "percent",
+                  "color": "#FFA940",
+                  "label": "2 %"
+                },
+                {
+                  "value": 5,
+                  "unit": "percent",
+                  "color": "#F1575F",
+                  "label": "5 %"
+                }
+              ]
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "composite",
+                "plugin": {
+                  "kind": "signoz/CompositeQuery",
+                  "spec": {
+                    "queries": [
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "A",
+                          "signal": "metrics",
+                          "source": "",
+                          "stepInterval": 60,
+                          "aggregations": [
+                            {
+                              "metricName": "http.server.request.duration.count",
+                              "temporality": "",
+                              "timeAggregation": "increase",
+                              "spaceAggregation": "sum"
+                            }
+                          ],
+                          "disabled": true,
+                          "filter": {
+                            "expression": "deployment.environment.name IN $env AND service.name = 'faclab-core' AND http.response.status_code LIKE '5%'"
+                          },
+                          "groupBy": [],
+                          "order": [],
+                          "having": {
+                            "expression": ""
+                          },
+                          "functions": [],
+                          "legend": ""
+                        }
+                      },
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "B",
+                          "signal": "metrics",
+                          "source": "",
+                          "stepInterval": 60,
+                          "aggregations": [
+                            {
+                              "metricName": "http.server.request.duration.count",
+                              "temporality": "",
+                              "timeAggregation": "increase",
+                              "spaceAggregation": "sum"
+                            }
+                          ],
+                          "disabled": true,
+                          "filter": {
+                            "expression": "deployment.environment.name IN $env AND service.name = 'faclab-core'"
+                          },
+                          "groupBy": [],
+                          "order": [],
+                          "having": {
+                            "expression": ""
+                          },
+                          "functions": [],
+                          "legend": ""
+                        }
+                      },
+                      {
+                        "type": "builder_formula",
+                        "spec": {
+                          "name": "F1",
+                          "expression": "A / B * 100",
+                          "disabled": false,
+                          "legend": "faclab-core"
+                        }
+                      },
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "C",
+                          "signal": "metrics",
+                          "source": "",
+                          "stepInterval": 60,
+                          "aggregations": [
+                            {
+                              "metricName": "http.server.duration.count",
+                              "temporality": "",
+                              "timeAggregation": "increase",
+                              "spaceAggregation": "sum"
+                            }
+                          ],
+                          "disabled": true,
+                          "filter": {
+                            "expression": "deployment.environment.name IN $env AND service.name = 'faclab-invoicing' AND http.status_code LIKE '5%'"
+                          },
+                          "groupBy": [],
+                          "order": [],
+                          "having": {
+                            "expression": ""
+                          },
+                          "functions": [],
+                          "legend": ""
+                        }
+                      },
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "D",
+                          "signal": "metrics",
+                          "source": "",
+                          "stepInterval": 60,
+                          "aggregations": [
+                            {
+                              "metricName": "http.server.duration.count",
+                              "temporality": "",
+                              "timeAggregation": "increase",
+                              "spaceAggregation": "sum"
+                            }
+                          ],
+                          "disabled": true,
+                          "filter": {
+                            "expression": "deployment.environment.name IN $env AND service.name = 'faclab-invoicing'"
+                          },
+                          "groupBy": [],
+                          "order": [],
+                          "having": {
+                            "expression": ""
+                          },
+                          "functions": [],
+                          "legend": ""
+                        }
+                      },
+                      {
+                        "type": "builder_formula",
+                        "spec": {
+                          "name": "F2",
+                          "expression": "C / D * 100",
+                          "disabled": false,
+                          "legend": "faclab-invoicing"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
+      },
+      "latency": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "p95 por servicio",
+            "description": "Consulta: p95 de http.server.request.duration (core, segundos) y de http.server.duration (facturación, milisegundos convertidos a segundos). Unidad: segundos. Umbral: 1,5 s en las rutas del POS (alerta latencia-pos). Acción: abrir Faclab · API Core"
+          },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "fillSpans": false
+              },
+              "formatting": {
+                "unit": "s",
+                "decimalPrecision": "2"
+              },
+              "chartAppearance": {
+                "lineInterpolation": "spline",
+                "showPoints": false,
+                "lineStyle": "solid",
+                "fillMode": "none",
+                "spanGaps": {
+                  "fillOnlyBelow": false,
+                  "fillLessThan": ""
+                }
+              },
+              "axes": {
+                "softMin": 0.0,
+                "softMax": null,
+                "isLogScale": false
+              },
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "customColors": {}
+              },
+              "thresholds": [
+                {
+                  "value": 1.5,
+                  "unit": "s",
+                  "color": "#FFA940",
+                  "label": "1,5 s"
+                }
+              ]
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "composite",
+                "plugin": {
+                  "kind": "signoz/CompositeQuery",
+                  "spec": {
+                    "queries": [
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "A",
+                          "signal": "metrics",
+                          "source": "",
+                          "stepInterval": 60,
+                          "aggregations": [
+                            {
+                              "metricName": "http.server.request.duration.bucket",
+                              "temporality": "",
+                              "timeAggregation": "",
+                              "spaceAggregation": "p95"
+                            }
+                          ],
+                          "disabled": false,
+                          "filter": {
+                            "expression": "deployment.environment.name IN $env AND service.name = 'faclab-core'"
+                          },
+                          "groupBy": [],
+                          "order": [],
+                          "having": {
+                            "expression": ""
+                          },
+                          "functions": [],
+                          "legend": "faclab-core"
+                        }
+                      },
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "B",
+                          "signal": "metrics",
+                          "source": "",
+                          "stepInterval": 60,
+                          "aggregations": [
+                            {
+                              "metricName": "http.server.duration.bucket",
+                              "temporality": "",
+                              "timeAggregation": "",
+                              "spaceAggregation": "p95"
+                            }
+                          ],
+                          "disabled": true,
+                          "filter": {
+                            "expression": "deployment.environment.name IN $env AND service.name = 'faclab-invoicing'"
+                          },
+                          "groupBy": [],
+                          "order": [],
+                          "having": {
+                            "expression": ""
+                          },
+                          "functions": [],
+                          "legend": ""
+                        }
+                      },
+                      {
+                        "type": "builder_formula",
+                        "spec": {
+                          "name": "F1",
+                          "expression": "B / 1000",
+                          "disabled": false,
+                          "legend": "faclab-invoicing"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
+      },
+      "availability-trend": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Disponibilidad en el tiempo",
+            "description": "Consulta: httpcheck.status con http.status_class = 2xx por chequeo. Unidad: 1 = responde. Umbral: por debajo de 1 durante 2 min dispara servicio-no-disponible. Acción: revisar el servicio caído"
+          },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "fillSpans": false
+              },
+              "formatting": {
+                "unit": "",
+                "decimalPrecision": "2"
+              },
+              "chartAppearance": {
+                "lineInterpolation": "spline",
+                "showPoints": false,
+                "lineStyle": "solid",
+                "fillMode": "none",
+                "spanGaps": {
+                  "fillOnlyBelow": false,
+                  "fillLessThan": ""
+                }
+              },
+              "axes": {
+                "softMin": 0.0,
+                "softMax": null,
+                "isLogScale": false
+              },
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "customColors": {}
+              },
+              "thresholds": [
+                {
+                  "value": 1,
+                  "unit": "",
+                  "color": "#F1575F",
+                  "label": "disponible"
+                }
+              ]
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "metrics",
+                    "source": "",
+                    "stepInterval": 60,
+                    "aggregations": [
+                      {
+                        "metricName": "httpcheck.status",
+                        "temporality": "",
+                        "timeAggregation": "avg",
+                        "spaceAggregation": "min"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment.name IN $env AND http.status_class = '2xx'"
+                    },
+                    "groupBy": [
+                      {
+                        "name": "http.url",
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string"
+                      }
+                    ],
+                    "order": [],
+                    "having": {
+                      "expression": ""
+                    },
+                    "functions": [],
+                    "legend": "{{http.url}}"
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
+      },
+      "queues": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Colas",
+            "description": "Consulta: faclab.outbox.pending (core) y faclab.invoices.due (comprobantes vencidos sin tomar). Unidad: mensajes y comprobantes. Umbral: informativo: una cola que solo crece indica un worker detenido. Acción: abrir Faclab · Kafka y mensajería o Faclab · Facturación electrónica"
+          },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "fillSpans": false
+              },
+              "formatting": {
+                "unit": "",
+                "decimalPrecision": "2"
+              },
+              "chartAppearance": {
+                "lineInterpolation": "spline",
+                "showPoints": false,
+                "lineStyle": "solid",
+                "fillMode": "none",
+                "spanGaps": {
+                  "fillOnlyBelow": false,
+                  "fillLessThan": ""
+                }
+              },
+              "axes": {
+                "softMin": 0.0,
+                "softMax": null,
+                "isLogScale": false
+              },
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "customColors": {}
+              },
+              "thresholds": []
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "composite",
+                "plugin": {
+                  "kind": "signoz/CompositeQuery",
+                  "spec": {
+                    "queries": [
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "A",
+                          "signal": "metrics",
+                          "source": "",
+                          "stepInterval": 60,
+                          "aggregations": [
+                            {
+                              "metricName": "faclab.outbox.pending",
+                              "temporality": "",
+                              "timeAggregation": "latest",
+                              "spaceAggregation": "sum"
+                            }
+                          ],
+                          "disabled": false,
+                          "filter": {
+                            "expression": "deployment.environment.name IN $env"
+                          },
+                          "groupBy": [],
+                          "order": [],
+                          "having": {
+                            "expression": ""
+                          },
+                          "functions": [],
+                          "legend": "outbox pendiente"
+                        }
+                      },
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "B",
+                          "signal": "metrics",
+                          "source": "",
+                          "stepInterval": 60,
+                          "aggregations": [
+                            {
+                              "metricName": "faclab.invoices.due",
+                              "temporality": "",
+                              "timeAggregation": "latest",
+                              "spaceAggregation": "max"
+                            }
+                          ],
+                          "disabled": false,
+                          "filter": {
+                            "expression": "deployment.environment.name IN $env"
+                          },
+                          "groupBy": [],
+                          "order": [],
+                          "having": {
+                            "expression": ""
+                          },
+                          "functions": [],
+                          "legend": "comprobantes vencidos sin tomar"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
+      },
+      "ui-errors": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Errores de interfaz por ruta",
+            "description": "Consulta: spans ui.error de faclab-web por faclab.ui.route. Unidad: errores por intervalo. Umbral: sin umbral hasta tener línea base (S9.2). Acción: abrir el span en Traces: lleva la ruta, el código del ApiError y el stack recortado"
+          },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "fillSpans": false
+              },
+              "formatting": {
+                "unit": "",
+                "decimalPrecision": "2"
+              },
+              "chartAppearance": {
+                "lineInterpolation": "spline",
+                "showPoints": false,
+                "lineStyle": "solid",
+                "fillMode": "none",
+                "spanGaps": {
+                  "fillOnlyBelow": false,
+                  "fillLessThan": ""
+                }
+              },
+              "axes": {
+                "softMin": 0.0,
+                "softMax": null,
+                "isLogScale": false
+              },
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "customColors": {}
+              },
+              "thresholds": []
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "traces",
+                    "source": "",
+                    "stepInterval": 60,
+                    "aggregations": [
+                      {
+                        "expression": "count()"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment.name IN $env AND service.name = 'faclab-web' AND name = 'ui.error'"
+                    },
+                    "groupBy": [
+                      {
+                        "name": "faclab.ui.route",
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string"
+                      }
+                    ],
+                    "order": [],
+                    "having": {
+                      "expression": ""
+                    },
+                    "functions": [],
+                    "legend": "{{faclab.ui.route}}"
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
+      },
+      "lcp": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "LCP p75 por ruta",
+            "description": "Consulta: p75 de faclab.web_vitals.lcp por faclab.ui.route. Unidad: milisegundos. Umbral: Google: bueno hasta 2,5 s, malo desde 4 s. Acción: revisar el tamaño del bundle y las llamadas de la carga"
+          },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "fillSpans": false
+              },
+              "formatting": {
+                "unit": "ms",
+                "decimalPrecision": "2"
+              },
+              "chartAppearance": {
+                "lineInterpolation": "spline",
+                "showPoints": false,
+                "lineStyle": "solid",
+                "fillMode": "none",
+                "spanGaps": {
+                  "fillOnlyBelow": false,
+                  "fillLessThan": ""
+                }
+              },
+              "axes": {
+                "softMin": 0.0,
+                "softMax": null,
+                "isLogScale": false
+              },
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "customColors": {}
+              },
+              "thresholds": [
+                {
+                  "value": 2500,
+                  "unit": "ms",
+                  "color": "#FFA940",
+                  "label": "2,5 s"
+                },
+                {
+                  "value": 4000,
+                  "unit": "ms",
+                  "color": "#F1575F",
+                  "label": "4 s"
+                }
+              ]
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "metrics",
+                    "source": "",
+                    "stepInterval": 60,
+                    "aggregations": [
+                      {
+                        "metricName": "faclab.web_vitals.lcp.bucket",
+                        "temporality": "",
+                        "timeAggregation": "",
+                        "spaceAggregation": "p75"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment.name IN $env"
+                    },
+                    "groupBy": [
+                      {
+                        "name": "faclab.ui.route",
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string"
+                      }
+                    ],
+                    "order": [],
+                    "having": {
+                      "expression": ""
+                    },
+                    "functions": [],
+                    "legend": "{{faclab.ui.route}}"
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
+      },
+      "inp": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "INP p75 por ruta",
+            "description": "Consulta: p75 de faclab.web_vitals.inp por faclab.ui.route. Unidad: milisegundos. Umbral: Google: bueno hasta 200 ms, malo desde 500 ms. Acción: revisar la interacción más lenta de esa pantalla"
+          },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "fillSpans": false
+              },
+              "formatting": {
+                "unit": "ms",
+                "decimalPrecision": "2"
+              },
+              "chartAppearance": {
+                "lineInterpolation": "spline",
+                "showPoints": false,
+                "lineStyle": "solid",
+                "fillMode": "none",
+                "spanGaps": {
+                  "fillOnlyBelow": false,
+                  "fillLessThan": ""
+                }
+              },
+              "axes": {
+                "softMin": 0.0,
+                "softMax": null,
+                "isLogScale": false
+              },
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "customColors": {}
+              },
+              "thresholds": [
+                {
+                  "value": 200,
+                  "unit": "ms",
+                  "color": "#FFA940",
+                  "label": "200 ms"
+                },
+                {
+                  "value": 500,
+                  "unit": "ms",
+                  "color": "#F1575F",
+                  "label": "500 ms"
+                }
+              ]
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "metrics",
+                    "source": "",
+                    "stepInterval": 60,
+                    "aggregations": [
+                      {
+                        "metricName": "faclab.web_vitals.inp.bucket",
+                        "temporality": "",
+                        "timeAggregation": "",
+                        "spaceAggregation": "p75"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment.name IN $env"
+                    },
+                    "groupBy": [
+                      {
+                        "name": "faclab.ui.route",
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string"
+                      }
+                    ],
+                    "order": [],
+                    "having": {
+                      "expression": ""
+                    },
+                    "functions": [],
+                    "legend": "{{faclab.ui.route}}"
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
+      },
+      "cls": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "CLS p75 por ruta",
+            "description": "Consulta: p75 de faclab.web_vitals.cls por faclab.ui.route. Unidad: sin unidad. Umbral: Google: bueno hasta 0,1, malo desde 0,25. Acción: revisar elementos que se mueven al cargar"
+          },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "fillSpans": false
+              },
+              "formatting": {
+                "unit": "",
+                "decimalPrecision": "2"
+              },
+              "chartAppearance": {
+                "lineInterpolation": "spline",
+                "showPoints": false,
+                "lineStyle": "solid",
+                "fillMode": "none",
+                "spanGaps": {
+                  "fillOnlyBelow": false,
+                  "fillLessThan": ""
+                }
+              },
+              "axes": {
+                "softMin": 0.0,
+                "softMax": null,
+                "isLogScale": false
+              },
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "customColors": {}
+              },
+              "thresholds": [
+                {
+                  "value": 0.1,
+                  "unit": "",
+                  "color": "#FFA940",
+                  "label": "0,1"
+                },
+                {
+                  "value": 0.25,
+                  "unit": "",
+                  "color": "#F1575F",
+                  "label": "0,25"
+                }
+              ]
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "metrics",
+                    "source": "",
+                    "stepInterval": 60,
+                    "aggregations": [
+                      {
+                        "metricName": "faclab.web_vitals.cls.bucket",
+                        "temporality": "",
+                        "timeAggregation": "",
+                        "spaceAggregation": "p75"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment.name IN $env"
+                    },
+                    "groupBy": [
+                      {
+                        "name": "faclab.ui.route",
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string"
+                      }
+                    ],
+                    "order": [],
+                    "having": {
+                      "expression": ""
+                    },
+                    "functions": [],
+                    "legend": "{{faclab.ui.route}}"
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
+      }
+    },
+    "layouts": [
+      {
+        "kind": "Grid",
+        "spec": {
+          "display": {
+            "title": "Estado actual",
+            "collapse": {
+              "open": true
+            }
+          },
+          "items": [
+            {
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 3,
+              "content": {
+                "$ref": "#/spec/panels/intro"
+              }
+            },
+            {
+              "x": 0,
+              "y": 3,
+              "width": 4,
+              "height": 4,
+              "content": {
+                "$ref": "#/spec/panels/availability"
+              }
+            },
+            {
+              "x": 4,
+              "y": 3,
+              "width": 2,
+              "height": 4,
+              "content": {
+                "$ref": "#/spec/panels/core-5xx"
+              }
+            },
+            {
+              "x": 6,
+              "y": 3,
+              "width": 2,
+              "height": 4,
+              "content": {
+                "$ref": "#/spec/panels/outbox-age"
+              }
+            },
+            {
+              "x": 8,
+              "y": 3,
+              "width": 2,
+              "height": 4,
+              "content": {
+                "$ref": "#/spec/panels/invoices-pending"
+              }
+            },
+            {
+              "x": 10,
+              "y": 3,
+              "width": 2,
+              "height": 4,
+              "content": {
+                "$ref": "#/spec/panels/failed-messages"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "kind": "Grid",
+        "spec": {
+          "display": {
+            "title": "Tendencias",
+            "collapse": {
+              "open": true
+            }
+          },
+          "items": [
+            {
+              "x": 0,
+              "y": 0,
+              "width": 6,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/error-rate"
+              }
+            },
+            {
+              "x": 6,
+              "y": 0,
+              "width": 6,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/latency"
+              }
+            },
+            {
+              "x": 0,
+              "y": 6,
+              "width": 6,
+              "height": 5,
+              "content": {
+                "$ref": "#/spec/panels/availability-trend"
+              }
+            },
+            {
+              "x": 6,
+              "y": 6,
+              "width": 6,
+              "height": 5,
+              "content": {
+                "$ref": "#/spec/panels/queues"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "kind": "Grid",
+        "spec": {
+          "display": {
+            "title": "Navegador",
+            "collapse": {
+              "open": true
+            }
+          },
+          "items": [
+            {
+              "x": 0,
+              "y": 0,
+              "width": 6,
+              "height": 5,
+              "content": {
+                "$ref": "#/spec/panels/ui-errors"
+              }
+            },
+            {
+              "x": 6,
+              "y": 0,
+              "width": 6,
+              "height": 5,
+              "content": {
+                "$ref": "#/spec/panels/lcp"
+              }
+            },
+            {
+              "x": 0,
+              "y": 5,
+              "width": 6,
+              "height": 5,
+              "content": {
+                "$ref": "#/spec/panels/inp"
+              }
+            },
+            {
+              "x": 6,
+              "y": 5,
+              "width": 6,
+              "height": 5,
+              "content": {
+                "$ref": "#/spec/panels/cls"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "duration": "1h",
+    "refreshInterval": "1m",
+    "links": []
+  }
+}

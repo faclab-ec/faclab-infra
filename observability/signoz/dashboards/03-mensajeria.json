@@ -1,0 +1,924 @@
+{
+  "schemaVersion": "v6",
+  "name": "faclab-mensajeria",
+  "tags": [
+    {
+      "key": "faclab",
+      "value": "observabilidad"
+    }
+  ],
+  "spec": {
+    "display": {
+      "name": "Faclab · Kafka y mensajería",
+      "description": "¿Fluyen los mensajes entre servicios? Outbox, envíos, consumo, lag y mensajes fallidos."
+    },
+    "variables": [
+      {
+        "kind": "ListVariable",
+        "spec": {
+          "name": "env",
+          "display": {
+            "name": "Entorno",
+            "description": ""
+          },
+          "allowMultiple": true,
+          "allowAllValue": true,
+          "sort": "alphabetical-asc",
+          "plugin": {
+            "kind": "signoz/DynamicVariable",
+            "spec": {
+              "name": "deployment.environment.name",
+              "signal": "metrics"
+            }
+          }
+        }
+      }
+    ],
+    "panels": {
+      "outbox-pending": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Outbox pendiente por tópico",
+            "description": "Consulta: faclab.outbox.pending por messaging.destination.name. Unidad: mensajes. Umbral: informativo: crece si nadie publica. Acción: revisar el worker del core y Kafka"
+          },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "fillSpans": false
+              },
+              "formatting": {
+                "unit": "",
+                "decimalPrecision": "2"
+              },
+              "chartAppearance": {
+                "lineInterpolation": "spline",
+                "showPoints": false,
+                "lineStyle": "solid",
+                "fillMode": "none",
+                "spanGaps": {
+                  "fillOnlyBelow": false,
+                  "fillLessThan": ""
+                }
+              },
+              "axes": {
+                "softMin": 0.0,
+                "softMax": null,
+                "isLogScale": false
+              },
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "customColors": {}
+              },
+              "thresholds": []
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "metrics",
+                    "source": "",
+                    "stepInterval": 60,
+                    "aggregations": [
+                      {
+                        "metricName": "faclab.outbox.pending",
+                        "temporality": "",
+                        "timeAggregation": "latest",
+                        "spaceAggregation": "max"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment.name IN $env"
+                    },
+                    "groupBy": [
+                      {
+                        "name": "messaging.destination.name",
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string"
+                      }
+                    ],
+                    "order": [],
+                    "having": {
+                      "expression": ""
+                    },
+                    "functions": [],
+                    "legend": "{{messaging.destination.name}}"
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
+      },
+      "outbox-age": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Edad del mensaje más antiguo",
+            "description": "Consulta: faclab.outbox.oldest_age por tópico. Unidad: segundos. Umbral: 5 min advertencia, 15 min crítica. Acción: runbook outbox-atascado"
+          },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "fillSpans": false
+              },
+              "formatting": {
+                "unit": "s",
+                "decimalPrecision": "2"
+              },
+              "chartAppearance": {
+                "lineInterpolation": "spline",
+                "showPoints": false,
+                "lineStyle": "solid",
+                "fillMode": "none",
+                "spanGaps": {
+                  "fillOnlyBelow": false,
+                  "fillLessThan": ""
+                }
+              },
+              "axes": {
+                "softMin": 0.0,
+                "softMax": null,
+                "isLogScale": false
+              },
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "customColors": {}
+              },
+              "thresholds": [
+                {
+                  "value": 300,
+                  "unit": "s",
+                  "color": "#FFA940",
+                  "label": "5 min"
+                },
+                {
+                  "value": 900,
+                  "unit": "s",
+                  "color": "#F1575F",
+                  "label": "15 min"
+                }
+              ]
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "metrics",
+                    "source": "",
+                    "stepInterval": 60,
+                    "aggregations": [
+                      {
+                        "metricName": "faclab.outbox.oldest_age",
+                        "temporality": "",
+                        "timeAggregation": "latest",
+                        "spaceAggregation": "max"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment.name IN $env"
+                    },
+                    "groupBy": [
+                      {
+                        "name": "messaging.destination.name",
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string"
+                      }
+                    ],
+                    "order": [],
+                    "having": {
+                      "expression": ""
+                    },
+                    "functions": [],
+                    "legend": "{{messaging.destination.name}}"
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
+      },
+      "sent": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Mensajes enviados por tópico",
+            "description": "Consulta: messaging.client.sent.messages por servicio y tópico; los envíos fallidos llevan error.type. Unidad: mensajes por intervalo. Umbral: informativo. Acción: un tópico sin envíos y con outbox creciendo: relay detenido"
+          },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "fillSpans": false
+              },
+              "formatting": {
+                "unit": "",
+                "decimalPrecision": "2"
+              },
+              "chartAppearance": {
+                "lineInterpolation": "spline",
+                "showPoints": false,
+                "lineStyle": "solid",
+                "fillMode": "none",
+                "spanGaps": {
+                  "fillOnlyBelow": false,
+                  "fillLessThan": ""
+                }
+              },
+              "axes": {
+                "softMin": 0.0,
+                "softMax": null,
+                "isLogScale": false
+              },
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "customColors": {}
+              },
+              "thresholds": []
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "metrics",
+                    "source": "",
+                    "stepInterval": 60,
+                    "aggregations": [
+                      {
+                        "metricName": "messaging.client.sent.messages",
+                        "temporality": "",
+                        "timeAggregation": "increase",
+                        "spaceAggregation": "sum"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment.name IN $env"
+                    },
+                    "groupBy": [
+                      {
+                        "name": "service.name",
+                        "fieldContext": "resource",
+                        "fieldDataType": "string"
+                      },
+                      {
+                        "name": "messaging.destination.name",
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string"
+                      }
+                    ],
+                    "order": [],
+                    "having": {
+                      "expression": ""
+                    },
+                    "functions": [],
+                    "legend": "{{service.name}} → {{messaging.destination.name}}"
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
+      },
+      "outbox-failed": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Outbox fallidos por tópico",
+            "description": "Consulta: faclab.outbox.failed por tópico. Unidad: mensajes. Umbral: > 0 (alerta outbox-fallidos). Acción: make outbox-failed y outbox-retry (runbook mensajes-fallidos)"
+          },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "fillSpans": false
+              },
+              "formatting": {
+                "unit": "",
+                "decimalPrecision": "2"
+              },
+              "chartAppearance": {
+                "lineInterpolation": "spline",
+                "showPoints": false,
+                "lineStyle": "solid",
+                "fillMode": "none",
+                "spanGaps": {
+                  "fillOnlyBelow": false,
+                  "fillLessThan": ""
+                }
+              },
+              "axes": {
+                "softMin": 0.0,
+                "softMax": null,
+                "isLogScale": false
+              },
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "customColors": {}
+              },
+              "thresholds": [
+                {
+                  "value": 0,
+                  "unit": "",
+                  "color": "#F1575F",
+                  "label": "> 0"
+                }
+              ]
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "metrics",
+                    "source": "",
+                    "stepInterval": 60,
+                    "aggregations": [
+                      {
+                        "metricName": "faclab.outbox.failed",
+                        "temporality": "",
+                        "timeAggregation": "latest",
+                        "spaceAggregation": "max"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment.name IN $env"
+                    },
+                    "groupBy": [
+                      {
+                        "name": "messaging.destination.name",
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string"
+                      }
+                    ],
+                    "order": [],
+                    "having": {
+                      "expression": ""
+                    },
+                    "functions": [],
+                    "legend": "{{messaging.destination.name}}"
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
+      },
+      "lag": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Lag por grupo",
+            "description": "Consulta: kafka.consumer_group.lag_sum por group y topic (Collector, cada 30 s). Unidad: mensajes. Umbral: > 0 durante 10 min (alerta consumidor-detenido). Acción: runbook consumidor-detenido"
+          },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "fillSpans": false
+              },
+              "formatting": {
+                "unit": "",
+                "decimalPrecision": "2"
+              },
+              "chartAppearance": {
+                "lineInterpolation": "spline",
+                "showPoints": false,
+                "lineStyle": "solid",
+                "fillMode": "none",
+                "spanGaps": {
+                  "fillOnlyBelow": false,
+                  "fillLessThan": ""
+                }
+              },
+              "axes": {
+                "softMin": 0.0,
+                "softMax": null,
+                "isLogScale": false
+              },
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "customColors": {}
+              },
+              "thresholds": []
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "metrics",
+                    "source": "",
+                    "stepInterval": 60,
+                    "aggregations": [
+                      {
+                        "metricName": "kafka.consumer_group.lag_sum",
+                        "temporality": "",
+                        "timeAggregation": "latest",
+                        "spaceAggregation": "max"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment.name IN $env"
+                    },
+                    "groupBy": [
+                      {
+                        "name": "group",
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string"
+                      },
+                      {
+                        "name": "topic",
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string"
+                      }
+                    ],
+                    "order": [],
+                    "having": {
+                      "expression": ""
+                    },
+                    "functions": [],
+                    "legend": "{{group}} / {{topic}}"
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
+      },
+      "processed": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Mensajes procesados",
+            "description": "Consulta: messaging.process.duration.count por servicio y tópico; con error.type, los intentos fallidos. Unidad: intentos por intervalo. Umbral: informativo. Acción: muchos intentos con error: reintentos o dead letters"
+          },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "fillSpans": false
+              },
+              "formatting": {
+                "unit": "",
+                "decimalPrecision": "2"
+              },
+              "chartAppearance": {
+                "lineInterpolation": "spline",
+                "showPoints": false,
+                "lineStyle": "solid",
+                "fillMode": "none",
+                "spanGaps": {
+                  "fillOnlyBelow": false,
+                  "fillLessThan": ""
+                }
+              },
+              "axes": {
+                "softMin": 0.0,
+                "softMax": null,
+                "isLogScale": false
+              },
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "customColors": {}
+              },
+              "thresholds": []
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "composite",
+                "plugin": {
+                  "kind": "signoz/CompositeQuery",
+                  "spec": {
+                    "queries": [
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "A",
+                          "signal": "metrics",
+                          "source": "",
+                          "stepInterval": 60,
+                          "aggregations": [
+                            {
+                              "metricName": "messaging.process.duration.count",
+                              "temporality": "",
+                              "timeAggregation": "increase",
+                              "spaceAggregation": "sum"
+                            }
+                          ],
+                          "disabled": false,
+                          "filter": {
+                            "expression": "deployment.environment.name IN $env"
+                          },
+                          "groupBy": [
+                            {
+                              "name": "service.name",
+                              "fieldContext": "resource",
+                              "fieldDataType": "string"
+                            },
+                            {
+                              "name": "messaging.destination.name",
+                              "fieldContext": "attribute",
+                              "fieldDataType": "string"
+                            }
+                          ],
+                          "order": [],
+                          "having": {
+                            "expression": ""
+                          },
+                          "functions": [],
+                          "legend": "{{service.name}} ← {{messaging.destination.name}}"
+                        }
+                      },
+                      {
+                        "type": "builder_query",
+                        "spec": {
+                          "name": "B",
+                          "signal": "metrics",
+                          "source": "",
+                          "stepInterval": 60,
+                          "aggregations": [
+                            {
+                              "metricName": "messaging.process.duration.count",
+                              "temporality": "",
+                              "timeAggregation": "increase",
+                              "spaceAggregation": "sum"
+                            }
+                          ],
+                          "disabled": false,
+                          "filter": {
+                            "expression": "deployment.environment.name IN $env AND error.type EXISTS"
+                          },
+                          "groupBy": [
+                            {
+                              "name": "service.name",
+                              "fieldContext": "resource",
+                              "fieldDataType": "string"
+                            },
+                            {
+                              "name": "messaging.destination.name",
+                              "fieldContext": "attribute",
+                              "fieldDataType": "string"
+                            }
+                          ],
+                          "order": [],
+                          "having": {
+                            "expression": ""
+                          },
+                          "functions": [],
+                          "legend": "con error {{service.name}} ← {{messaging.destination.name}}"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
+      },
+      "process-p95": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Duración de procesamiento p95",
+            "description": "Consulta: p95 de messaging.process.duration por tópico. Unidad: segundos. Umbral: informativo. Acción: un tópico lento: ver la traza process <tópico>"
+          },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "fillSpans": false
+              },
+              "formatting": {
+                "unit": "s",
+                "decimalPrecision": "2"
+              },
+              "chartAppearance": {
+                "lineInterpolation": "spline",
+                "showPoints": false,
+                "lineStyle": "solid",
+                "fillMode": "none",
+                "spanGaps": {
+                  "fillOnlyBelow": false,
+                  "fillLessThan": ""
+                }
+              },
+              "axes": {
+                "softMin": 0.0,
+                "softMax": null,
+                "isLogScale": false
+              },
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "customColors": {}
+              },
+              "thresholds": []
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "metrics",
+                    "source": "",
+                    "stepInterval": 60,
+                    "aggregations": [
+                      {
+                        "metricName": "messaging.process.duration.bucket",
+                        "temporality": "",
+                        "timeAggregation": "",
+                        "spaceAggregation": "p95"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment.name IN $env"
+                    },
+                    "groupBy": [
+                      {
+                        "name": "messaging.destination.name",
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string"
+                      }
+                    ],
+                    "order": [],
+                    "having": {
+                      "expression": ""
+                    },
+                    "functions": [],
+                    "legend": "{{messaging.destination.name}}"
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
+      },
+      "dead-letters": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Dead letters por servicio",
+            "description": "Consulta: faclab.dead_letters.pending por servicio y tópico. Unidad: mensajes. Umbral: > 0 (alerta dead-letters). Acción: runbook mensajes-fallidos"
+          },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "fillSpans": false
+              },
+              "formatting": {
+                "unit": "",
+                "decimalPrecision": "2"
+              },
+              "chartAppearance": {
+                "lineInterpolation": "spline",
+                "showPoints": false,
+                "lineStyle": "solid",
+                "fillMode": "none",
+                "spanGaps": {
+                  "fillOnlyBelow": false,
+                  "fillLessThan": ""
+                }
+              },
+              "axes": {
+                "softMin": 0.0,
+                "softMax": null,
+                "isLogScale": false
+              },
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "customColors": {}
+              },
+              "thresholds": [
+                {
+                  "value": 0,
+                  "unit": "",
+                  "color": "#F1575F",
+                  "label": "> 0"
+                }
+              ]
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "metrics",
+                    "source": "",
+                    "stepInterval": 60,
+                    "aggregations": [
+                      {
+                        "metricName": "faclab.dead_letters.pending",
+                        "temporality": "",
+                        "timeAggregation": "latest",
+                        "spaceAggregation": "max"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment.name IN $env"
+                    },
+                    "groupBy": [
+                      {
+                        "name": "service.name",
+                        "fieldContext": "resource",
+                        "fieldDataType": "string"
+                      },
+                      {
+                        "name": "messaging.destination.name",
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string"
+                      }
+                    ],
+                    "order": [],
+                    "having": {
+                      "expression": ""
+                    },
+                    "functions": [],
+                    "legend": "{{service.name}} {{messaging.destination.name}}"
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
+      }
+    },
+    "layouts": [
+      {
+        "kind": "Grid",
+        "spec": {
+          "display": {
+            "title": "Productores",
+            "collapse": {
+              "open": true
+            }
+          },
+          "items": [
+            {
+              "x": 0,
+              "y": 0,
+              "width": 6,
+              "height": 5,
+              "content": {
+                "$ref": "#/spec/panels/outbox-pending"
+              }
+            },
+            {
+              "x": 6,
+              "y": 0,
+              "width": 6,
+              "height": 5,
+              "content": {
+                "$ref": "#/spec/panels/outbox-age"
+              }
+            },
+            {
+              "x": 0,
+              "y": 5,
+              "width": 6,
+              "height": 5,
+              "content": {
+                "$ref": "#/spec/panels/sent"
+              }
+            },
+            {
+              "x": 6,
+              "y": 5,
+              "width": 6,
+              "height": 5,
+              "content": {
+                "$ref": "#/spec/panels/outbox-failed"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "kind": "Grid",
+        "spec": {
+          "display": {
+            "title": "Consumidores",
+            "collapse": {
+              "open": true
+            }
+          },
+          "items": [
+            {
+              "x": 0,
+              "y": 0,
+              "width": 6,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/lag"
+              }
+            },
+            {
+              "x": 6,
+              "y": 0,
+              "width": 6,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/processed"
+              }
+            },
+            {
+              "x": 0,
+              "y": 6,
+              "width": 6,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/process-p95"
+              }
+            },
+            {
+              "x": 6,
+              "y": 6,
+              "width": 6,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/dead-letters"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "duration": "1h",
+    "refreshInterval": "1m",
+    "links": []
+  }
+}

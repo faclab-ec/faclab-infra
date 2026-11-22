@@ -1,0 +1,115 @@
+{
+  "alert": "Disco del servidor casi lleno",
+  "alertType": "METRIC_BASED_ALERT",
+  "description": "Un sistema de archivos del servidor pasó del 80 % de uso.",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "source": "",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "system.filesystem.utilization",
+                "temporality": "",
+                "timeAggregation": "latest",
+                "spaceAggregation": "max"
+              }
+            ],
+            "disabled": false,
+            "filter": {
+              "expression": ""
+            },
+            "groupBy": [
+              {
+                "name": "host.name",
+                "fieldContext": "resource",
+                "fieldDataType": "string"
+              },
+              {
+                "name": "mountpoint",
+                "fieldContext": "attribute",
+                "fieldDataType": "string"
+              },
+              {
+                "name": "deployment.environment.name",
+                "fieldContext": "resource",
+                "fieldDataType": "string"
+              }
+            ],
+            "order": [],
+            "having": {
+              "expression": ""
+            },
+            "functions": [],
+            "legend": ""
+          }
+        }
+      ],
+      "unit": "percentunit"
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "op": "above",
+          "matchType": "last",
+          "target": 0.8,
+          "channels": [
+            "faclab-correo"
+          ]
+        },
+        {
+          "name": "critical",
+          "op": "above",
+          "matchType": "last",
+          "target": 0.9,
+          "channels": [
+            "faclab-correo",
+            "faclab-telegram"
+          ]
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "5m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "groupBy": [
+      "host.name",
+      "mountpoint"
+    ],
+    "usePolicy": false,
+    "renotify": {
+      "enabled": true,
+      "interval": "4h",
+      "alertStates": [
+        "firing"
+      ]
+    }
+  },
+  "labels": {
+    "faclab_rule": "disco"
+  },
+  "annotations": {
+    "summary": "Disco del servidor casi lleno",
+    "description": "Un sistema de archivos del servidor pasó del 80 % de uso. Valor: {{$value}} (umbral {{$threshold}}). Runbook: https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/disco.md",
+    "runbook_url": "https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/disco.md"
+  },
+  "disabled": false
+}

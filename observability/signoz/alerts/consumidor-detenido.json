@@ -1,0 +1,107 @@
+{
+  "alert": "Consumidor de Kafka detenido",
+  "alertType": "METRIC_BASED_ALERT",
+  "description": "Un grupo de consumidores tiene mensajes sin leer durante 10 minutos seguidos.",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "source": "",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "kafka.consumer_group.lag_sum",
+                "temporality": "",
+                "timeAggregation": "latest",
+                "spaceAggregation": "max"
+              }
+            ],
+            "disabled": false,
+            "filter": {
+              "expression": ""
+            },
+            "groupBy": [
+              {
+                "name": "group",
+                "fieldContext": "attribute",
+                "fieldDataType": "string"
+              },
+              {
+                "name": "topic",
+                "fieldContext": "attribute",
+                "fieldDataType": "string"
+              },
+              {
+                "name": "deployment.environment.name",
+                "fieldContext": "resource",
+                "fieldDataType": "string"
+              }
+            ],
+            "order": [],
+            "having": {
+              "expression": ""
+            },
+            "functions": [],
+            "legend": ""
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "critical",
+          "op": "above",
+          "matchType": "all_the_times",
+          "target": 0,
+          "channels": [
+            "faclab-correo",
+            "faclab-telegram"
+          ]
+        }
+      ]
+    },
+    "requireMinPoints": true,
+    "requiredNumPoints": 7
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "10m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "groupBy": [
+      "group",
+      "topic"
+    ],
+    "usePolicy": false,
+    "renotify": {
+      "enabled": true,
+      "interval": "4h",
+      "alertStates": [
+        "firing"
+      ]
+    }
+  },
+  "labels": {
+    "faclab_rule": "consumidor-detenido"
+  },
+  "annotations": {
+    "summary": "Consumidor de Kafka detenido",
+    "description": "Un grupo de consumidores tiene mensajes sin leer durante 10 minutos seguidos. Valor: {{$value}} (umbral {{$threshold}}). Runbook: https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/consumidor-detenido.md",
+    "runbook_url": "https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/consumidor-detenido.md"
+  },
+  "disabled": false
+}

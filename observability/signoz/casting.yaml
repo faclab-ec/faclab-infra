@@ -1,0 +1,87 @@
+# SigNoz local for the Faclab services, installed with Foundry (S7.5): `foundryctl forge` turns this
+# file into observability/signoz/pours/deployment/compose.yaml, which scripts/signoz.sh runs.
+# SigNoz no longer ships a Docker Compose file since v0.130.
+#
+# Versions: those of SigNoz's Helm chart 0.151.0 (signoz v0.151.0 with signoz-otel-collector
+# v0.144.16 and ClickHouse 25.12.5). Upgrade them together.
+#
+# The ${VAR:-default} values survive the forge and Docker Compose fills them in from the
+# environment or faclab-infra's .env when it starts the services: the defaults are for local
+# development (Mailpit, no TLS) and any secret (SMTP password) stays out of this file.
+apiVersion: v1alpha1
+kind: Installation
+metadata:
+  name: signoz
+spec:
+  deployment:
+    flavor: compose
+    mode: docker
+  signoz:
+    spec:
+      image: signoz/signoz:v0.151.0
+      env:
+        # Links in the notifications and in SigNoz's own emails
+        SIGNOZ_GLOBAL_EXTERNAL__URL: ${SIGNOZ_EXTERNAL_URL:-http://localhost:8080}
+        SIGNOZ_ALERTMANAGER_SIGNOZ_EXTERNAL__URL: ${SIGNOZ_EXTERNAL_URL:-http://localhost:8080}
+        # SMTP of the email notification channels (Alertmanager's global smtp_* settings).
+        # Locally faclab-infra's Mailpit, which keeps the alerts at http://localhost:8025
+        SIGNOZ_ALERTMANAGER_SIGNOZ_GLOBAL_SMTP__SMARTHOST: ${SIGNOZ_SMTP_SMARTHOST:-mailpit:1025}
+        SIGNOZ_ALERTMANAGER_SIGNOZ_GLOBAL_SMTP__FROM: ${SIGNOZ_SMTP_FROM:-alertas@faclab.local}
+        SIGNOZ_ALERTMANAGER_SIGNOZ_GLOBAL_SMTP__HELLO: ${SIGNOZ_SMTP_HELLO:-localhost}
+        SIGNOZ_ALERTMANAGER_SIGNOZ_GLOBAL_SMTP__REQUIRE__TLS: ${SIGNOZ_SMTP_REQUIRE_TLS:-false}
+        SIGNOZ_ALERTMANAGER_SIGNOZ_GLOBAL_SMTP__AUTH__USERNAME: ${SIGNOZ_SMTP_USERNAME:-}
+        SIGNOZ_ALERTMANAGER_SIGNOZ_GLOBAL_SMTP__AUTH__PASSWORD: ${SIGNOZ_SMTP_PASSWORD:-}
+  ingester:
+    spec:
+      image: signoz/signoz-otel-collector:v0.144.16
+  telemetrystore:
+    spec:
+      image: clickhouse/clickhouse-server:25.12.5
+      config:
+        data:
+          # Foundry turns on every ClickHouse system log. The sampling profiler (trace_log) and the
+          # metric and text logs keep ClickHouse busy writing and merging them: on a laptop's Docker
+          # VM of 4 GB it took several cores and starved the rest. Only query_log and part_log stay
+          # (cheap, and useful to find a slow query). JSON Merge Patch: null deletes the section
+          config-0-0.yaml: |
+            trace_log: null
+            text_log: null
+            metric_log: null
+            asynchronous_metric_log: null
+            processors_profile_log: null
+            query_metric_log: null
+            query_thread_log: null
+            query_views_log: null
+            latency_log: null
+            error_log: null
+            session_log: null
+            zookeeper_log: null
+  telemetrykeeper:
+    kind: clickhousekeeper
+    spec:
+      image: clickhouse/clickhouse-keeper:25.12.5
+  metastore:
+    kind: postgres
+    spec:
+      image: postgres:16.16
+  patches:
+    - target: deployment/compose.yaml
+      operations:
+        # The ingester (SigNoz's OTel collector) loses its host ports: 4317 and 4318 on the host are
+        # the Faclab collector's (docker-compose.yml, S7.4), which forwards to it on faclab_network.
+        # Its alias keeps the name the Faclab collector and the S7.4 rollback already use
+        - op: remove
+          path: /services/ingester/ports
+        - op: add
+          path: /services/ingester/networks/faclab_network
+          value:
+            aliases:
+              - signoz-otel-collector
+        # SigNoz itself reaches Mailpit (and any other mail relay of faclab-infra) on faclab_network
+        - op: add
+          path: /services/signoz-signoz-0/networks/-
+          value: faclab_network
+        - op: add
+          path: /networks/faclab_network
+          value:
+            external: true

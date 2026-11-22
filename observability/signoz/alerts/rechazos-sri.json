@@ -1,0 +1,93 @@
+{
+  "alert": "Aumento de rechazos del SRI",
+  "alertType": "METRIC_BASED_ALERT",
+  "description": "El SRI rechazó más de 3 comprobantes en la última hora.",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "source": "",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "faclab.invoices.rejections",
+                "temporality": "",
+                "timeAggregation": "increase",
+                "spaceAggregation": "sum"
+              }
+            ],
+            "disabled": false,
+            "filter": {
+              "expression": ""
+            },
+            "groupBy": [
+              {
+                "name": "deployment.environment.name",
+                "fieldContext": "resource",
+                "fieldDataType": "string"
+              }
+            ],
+            "order": [],
+            "having": {
+              "expression": ""
+            },
+            "functions": [],
+            "legend": ""
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "op": "above",
+          "matchType": "in_total",
+          "target": 3,
+          "channels": [
+            "faclab-correo"
+          ]
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "1h",
+      "frequency": "5m"
+    }
+  },
+  "notificationSettings": {
+    "groupBy": [
+      "deployment.environment.name"
+    ],
+    "usePolicy": false,
+    "renotify": {
+      "enabled": true,
+      "interval": "4h",
+      "alertStates": [
+        "firing"
+      ]
+    }
+  },
+  "labels": {
+    "faclab_rule": "rechazos-sri"
+  },
+  "annotations": {
+    "summary": "Aumento de rechazos del SRI",
+    "description": "El SRI rechazó más de 3 comprobantes en la última hora. Valor: {{$value}} (umbral {{$threshold}}). Runbook: https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/rechazos-sri.md",
+    "runbook_url": "https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/rechazos-sri.md"
+  },
+  "disabled": false
+}

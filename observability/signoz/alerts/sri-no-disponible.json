@@ -1,0 +1,147 @@
+{
+  "alert": "SRI no disponible",
+  "alertType": "METRIC_BASED_ALERT",
+  "description": "Más de la mitad de las llamadas al SRI fallaron (timeout o error) en 10 minutos.",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "source": "",
+            "stepInterval": 600,
+            "aggregations": [
+              {
+                "metricName": "faclab.sri.request.duration.count",
+                "temporality": "",
+                "timeAggregation": "increase",
+                "spaceAggregation": "sum"
+              }
+            ],
+            "disabled": true,
+            "filter": {
+              "expression": "faclab.sri.outcome != 'ok'"
+            },
+            "groupBy": [
+              {
+                "name": "faclab.sri.environment",
+                "fieldContext": "attribute",
+                "fieldDataType": "string"
+              },
+              {
+                "name": "deployment.environment.name",
+                "fieldContext": "resource",
+                "fieldDataType": "string"
+              }
+            ],
+            "order": [],
+            "having": {
+              "expression": ""
+            },
+            "functions": [],
+            "legend": ""
+          }
+        },
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "B",
+            "signal": "metrics",
+            "source": "",
+            "stepInterval": 600,
+            "aggregations": [
+              {
+                "metricName": "faclab.sri.request.duration.count",
+                "temporality": "",
+                "timeAggregation": "increase",
+                "spaceAggregation": "sum"
+              }
+            ],
+            "disabled": true,
+            "filter": {
+              "expression": ""
+            },
+            "groupBy": [
+              {
+                "name": "faclab.sri.environment",
+                "fieldContext": "attribute",
+                "fieldDataType": "string"
+              },
+              {
+                "name": "deployment.environment.name",
+                "fieldContext": "resource",
+                "fieldDataType": "string"
+              }
+            ],
+            "order": [],
+            "having": {
+              "expression": ""
+            },
+            "functions": [],
+            "legend": ""
+          }
+        },
+        {
+          "type": "builder_formula",
+          "spec": {
+            "name": "F1",
+            "expression": "A / B * 100",
+            "disabled": false,
+            "legend": ""
+          }
+        }
+      ],
+      "unit": "percent"
+    },
+    "selectedQueryName": "F1",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "op": "above",
+          "matchType": "at_least_once",
+          "target": 50,
+          "channels": [
+            "faclab-correo"
+          ]
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "10m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "groupBy": [
+      "faclab.sri.environment"
+    ],
+    "usePolicy": false,
+    "renotify": {
+      "enabled": true,
+      "interval": "4h",
+      "alertStates": [
+        "firing"
+      ]
+    }
+  },
+  "labels": {
+    "faclab_rule": "sri-no-disponible"
+  },
+  "annotations": {
+    "summary": "SRI no disponible",
+    "description": "Más de la mitad de las llamadas al SRI fallaron (timeout o error) en 10 minutos. Valor: {{$value}} (umbral {{$threshold}}). Runbook: https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/sri-no-disponible.md",
+    "runbook_url": "https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/sri-no-disponible.md"
+  },
+  "disabled": false
+}

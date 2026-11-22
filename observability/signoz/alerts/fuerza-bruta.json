@@ -1,0 +1,93 @@
+{
+  "alert": "Posible fuerza bruta en el login",
+  "alertType": "METRIC_BASED_ALERT",
+  "description": "Más de 50 intentos de login fallidos (invalid o locked) en 5 minutos.",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "source": "",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "faclab.auth.login.attempts",
+                "temporality": "",
+                "timeAggregation": "increase",
+                "spaceAggregation": "sum"
+              }
+            ],
+            "disabled": false,
+            "filter": {
+              "expression": "result IN ('invalid', 'locked')"
+            },
+            "groupBy": [
+              {
+                "name": "deployment.environment.name",
+                "fieldContext": "resource",
+                "fieldDataType": "string"
+              }
+            ],
+            "order": [],
+            "having": {
+              "expression": ""
+            },
+            "functions": [],
+            "legend": ""
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "op": "above",
+          "matchType": "in_total",
+          "target": 50,
+          "channels": [
+            "faclab-correo"
+          ]
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "5m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "groupBy": [
+      "deployment.environment.name"
+    ],
+    "usePolicy": false,
+    "renotify": {
+      "enabled": true,
+      "interval": "4h",
+      "alertStates": [
+        "firing"
+      ]
+    }
+  },
+  "labels": {
+    "faclab_rule": "fuerza-bruta"
+  },
+  "annotations": {
+    "summary": "Posible fuerza bruta en el login",
+    "description": "Más de 50 intentos de login fallidos (invalid o locked) en 5 minutos. Valor: {{$value}} (umbral {{$threshold}}). Runbook: https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/fuerza-bruta.md",
+    "runbook_url": "https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/fuerza-bruta.md"
+  },
+  "disabled": false
+}

@@ -2,3 +2,8 @@
 .docker/
 .claude/
 .DS_Store
+# foundryctl (scripts/signoz.sh) and what it forges from observability/signoz/casting.yaml
+.foundry/
+observability/signoz/pours/
+observability/signoz/casting.yaml.lock
+__pycache__/
