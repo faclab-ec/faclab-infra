@@ -2,6 +2,9 @@
 
 Infraestructura local compartida para el ecosistema Faclab. Provee los servicios base que consumen el sistema principal y los microservicios.
 
+Además, `deploy/production/` tiene el stack de producción en un VPS (S8.1): ver
+[Despliegue en producción](#despliegue-en-producción).
+
 ## Servicios
 
 | Servicio | Imagen | Puerto local | Descripcion |
@@ -41,8 +44,10 @@ faclab-infra/
 ├── docker-compose.yml          # Definicion de servicios
 ├── .env.example                # Variables de entorno (plantilla)
 ├── .env                        # Variables de entorno (no versionado)
+├── deploy/
+│   └── production/             # Stack de producción en un VPS (S8.1): compose, Caddy, secretos, guía
 ├── garage/
-│   └── garage.toml             # Configuracion de Garage (un nodo, sin replicacion)
+│   └── garage.toml             # Configuracion de Garage (un nodo, sin replicacion); también la de producción
 ├── observability/
 │   ├── otel-collector/
 │   │   ├── config.yaml            # Configuración del OTel Collector (receptores, redacción, envío a SigNoz)
@@ -106,20 +111,24 @@ termina (ADR-0005).
 | `invoices` | faclab-invoicing (worker: solo `InvoiceAuthorized` e `InvoiceRejected`) | faclab-core (worker) |
 | `credit_notes.requested` | faclab-core (worker, desde el outbox) | faclab-invoicing (worker) |
 | `credit_notes.results` | faclab-invoicing (worker: `CreditNoteAuthorized` y `CreditNoteRejected`) | faclab-core (worker) |
-| `dlq` | faclab-invoicing (mensajes que no pudo procesar) | — |
 
 - Desde S4.2 faclab-invoicing ya no usa `invoices` para avanzar sus facturas: lo hace una cola en su
   base de datos, y el tópico solo lleva al core el resultado de cada una.
 - Cada tópico tiene `KAFKA_TOPIC_PARTITIONS` particiones (6 por defecto) y replicación 1 (un solo
-  nodo). Los mensajes llevan como clave la empresa (`tenant_id`): los de una empresa van en orden
+  nodo). Con `KAFKA_TOPIC_RETENTION_MS`, cada tópico recibe ese `retention.ms` (también los que ya
+  existen); sin ella conservan el del broker (`KAFKA_LOG_RETENTION_HOURS`). Producción la fija en 7
+  días. Los mensajes llevan como clave la empresa (`tenant_id`): los de una empresa van en orden
   por la misma partición y las empresas se reparten entre las demás.
 - Es idempotente: un tópico que ya existe conserva sus mensajes, y si tiene menos particiones crece
   hasta `KAFKA_TOPIC_PARTITIONS` (Kafka no las reduce). Al crecer, los mensajes nuevos de una empresa
   pueden ir a otra partición, así que conviene hacerlo con el tópico quieto.
 - Para correrlo de nuevo (por ejemplo, después de cambiar `KAFKA_TOPIC_PARTITIONS`):
   `docker compose run --rm kafka-topics`.
-- Los mensajes que faclab-core no pudo procesar no van a `dlq` sino a su tabla `dead_letters`, que se
-  reprocesa con `make reprocess-dead-letter` en faclab-core.
+- No hay tópico de mensajes fallidos (`dlq` se quitó en S8.1): cada servicio guarda los que su
+  consumidor no pudo procesar en su tabla `dead_letters` y los reprocesa él (`make
+  reprocess-dead-letter` en faclab-core, `npm run cli -- dead-letter-reprocess` en faclab-invoicing).
+  En un volumen de Kafka que ya lo tiene, `dlq` queda sin uso; se borra con `docker compose exec kafka
+  kafka-topics --bootstrap-server localhost:9092 --delete --topic dlq`.
 
 ## Base de datos de faclab-invoicing
 
@@ -161,10 +170,13 @@ docker compose exec object-storage /garage status          # estado del nodo
 docker compose exec object-storage /garage bucket info faclab-invoicing   # objetos y tamaño
 ```
 
-Los datos quedan en el volumen `faclab-infra_object_storage_data`. Se eligió Garage porque MinIO
-dejó de publicar imágenes de su edición comunitaria en 2025 y archivó su repositorio en 2026; qué
-servicio corre en el VPS se decide en S8.1 y la copia fuera del servidor, en S8.3. Cualquier
-servicio compatible con S3 sirve: faclab-invoicing solo usa su API.
+Los datos quedan en el volumen `faclab-infra_object_storage_data`.
+
+- **Por qué Garage.** MinIO dejó de publicar imágenes de su edición comunitaria en 2025 y archivó su
+  repositorio en 2026.
+- **En el VPS** corre el mismo Garage, con este `garage.toml` (S8.1, `deploy/production`).
+- **La copia fuera del servidor** es de S8.3.
+- **Cualquier servicio compatible con S3 sirve:** faclab-invoicing solo usa su API.
 
 ## Collector de OpenTelemetry
 
@@ -276,12 +288,21 @@ Así se pierden las métricas de infraestructura y la segunda capa de redacción
 
 ### En producción
 
-Queda para S8.1 (VPS) y S8.6 (SigNoz):
+`deploy/production` (S8.1) usa esta misma configuración más `deploy/production/otel-collector.yaml`,
+que se le suma como segundo `--config`:
 
-- los puertos del Collector no se publican: los servicios llegan por la red interna y el navegador por la ruta `/otlp` de Caddy, con límite de tamaño y de frecuencia;
-- el destino con TLS y, si D-1 elige SigNoz Cloud, su llave de ingesta;
-- `CORE_HEALTH_URL` hacia el API de producción (`:8080`);
-- `COLLECTOR_ENVIRONMENT=production`.
+- **Una sola instancia de PostgreSQL.** Deja un solo receptor, `postgresql/core`, hacia la instancia
+  compartida: cubre las dos bases.
+- **Salud.** Agrega la extensión `health_check` en `:13133`; la consulta `stack.sh status`, porque la
+  imagen no tiene shell para un healthcheck de Docker.
+- **Sin puertos publicados.** Los servicios llegan por la red interna y el navegador por la ruta `/otlp`
+  de Caddy, con 1 MiB y límite por IP.
+- **Objetivos de las métricas.** `CORE_HEALTH_URL` e `INVOICING_HEALTH_URL` apuntan a `core-api:8080` e
+  `invoicing-api:3173`.
+- **Entorno.** `deployment.environment.name` es el `ENVIRONMENT` del despliegue.
+
+Queda para S8.6 el destino con TLS hacia SigNoz (y su llave de ingesta si D-1 elige SigNoz Cloud) y la
+telemetría propia del Collector.
 
 ## SigNoz local (observabilidad)
 
@@ -430,7 +451,26 @@ apuntan a él (`SMTP_HOST=localhost`, `SMTP_PORT=1025`); desde un contenedor de 
 | Límite | Guarda los últimos 500 mensajes (`MP_MAX_MESSAGES`), sin volumen: se pierden al recrear el contenedor |
 
 El proveedor de correo real de cada entorno se configura en faclab-invoicing (`SMTP_*`, decisión
-D-3: cualquier servicio SMTP); se elige al desplegar (S8.1).
+D-3: cualquier servicio SMTP). `deploy/production` ya lo recibe por configuración (`env/` y
+`secrets.env`); el producto, con SPF, DKIM y DMARC, se elige con el primer VPS.
+
+## Despliegue en producción
+
+`deploy/production/` es el stack de producción en un VPS con Docker Compose (S8.1, ADR-0011 del
+core):
+
+- Caddy con TLS y límites por IP;
+- faclab-web;
+- el API y el worker de faclab-core y de faclab-invoicing;
+- PostgreSQL 17 con las dos bases y sus roles;
+- Kafka solo en la red interna, con los tópicos de `scripts/create-topics.sh`;
+- Garage y el Collector.
+
+Solo Caddy publica puertos (80 y 443). Los secretos viven cifrados con sops y age fuera de este
+repositorio.
+
+La guía completa, desde un servidor limpio hasta una venta facturada, está en
+[deploy/production/README.md](deploy/production/README.md).
 
 ## Variables de entorno
 
@@ -444,16 +484,22 @@ Cada PR y cada push a `master` corren `.github/workflows/ci.yml` en GitHub Actio
 - valida la configuración del Collector con su imagen fijada (`otelcol validate`, con los volúmenes y variables del servicio);
 - revisa los scripts con ShellCheck;
 - forja `observability/signoz/casting.yaml` con el `foundryctl` fijado y valida el compose generado (`scripts/signoz.sh config`);
-- valida los dashboards, las alertas y los runbooks sin red (`scripts/signoz-sync.py check`).
+- valida los dashboards, las alertas y los runbooks sin red (`scripts/signoz-sync.py check`);
+- valida el stack de producción (`deploy/production/scripts/ci-validate.sh`):
+  - el compose con cada archivo de entorno;
+  - la imagen de Caddy y su `Caddyfile` en los dos modos de TLS;
+  - el Collector con su overlay;
+  - que ningún archivo de secretos esté versionado.
 
 Para correr lo mismo en local:
 
 ```bash
 docker compose --env-file .env.example config -q
 docker compose --env-file .env.example run --rm --no-deps collector validate --config=/etc/otelcol-contrib/config.yaml
-shellcheck scripts/*.sh   # o: docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable scripts/*.sh
+shellcheck scripts/*.sh deploy/production/scripts/*.sh   # o: docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable ...
 scripts/signoz.sh config
 python3 scripts/signoz-sync.py check
+deploy/production/scripts/ci-validate.sh
 ```
 
 ## Comandos utiles
