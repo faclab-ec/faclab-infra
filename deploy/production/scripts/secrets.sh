@@ -15,7 +15,8 @@
 #                                               garage-secret
 #
 # Requirements: sops, age (its private key where sops looks for it, or SOPS_AGE_KEY_FILE) and an
-# OpenSSL that generates Ed25519 keys (macOS: brew install sops age openssl@3).
+# OpenSSL that generates Ed25519 keys (macOS: brew install sops age openssl@3). FACLAB_SSH changes
+# the ssh command of push (for example "ssh -p 2222" or "ssh -F <config file>").
 set -euo pipefail
 
 # What the server receives: env goes to /etc/faclab/secrets.env, files to /etc/faclab/secrets
@@ -133,21 +134,23 @@ names() {
 push() {
   local environment="${1:?usage: secrets.sh push <environment> <ssh target>}"
   local target="${2:?usage: secrets.sh push <environment> <ssh target>}"
-  local file name
+  local file name ssh_command
+  read -r -a ssh_command <<< "${FACLAB_SSH:-ssh}"
   file="$(existing_file "$environment")"
   # Decrypt first: a wrong key fails here, before touching the server
   sops decrypt "$file" > /dev/null
 
   # shellcheck disable=SC2016  # $HOME expands on the server
-  ssh "$target" 'umask 077 && rm -rf "$HOME/.faclab-incoming" && mkdir -p "$HOME/.faclab-incoming/secrets"'
+  "${ssh_command[@]}" "$target" \
+    'umask 077 && rm -rf "$HOME/.faclab-incoming" && mkdir -p "$HOME/.faclab-incoming/secrets"'
   # shellcheck disable=SC2016
   sops decrypt --extract '["env"]' --output-type dotenv "$file" |
-    ssh "$target" 'umask 077 && cat > "$HOME/.faclab-incoming/secrets.env"'
+    "${ssh_command[@]}" "$target" 'umask 077 && cat > "$HOME/.faclab-incoming/secrets.env"'
   for name in "${FILES[@]}"; do
     # The files are written as stored: the PEM keeps its line breaks. $name expands here, $HOME there
     # shellcheck disable=SC2029
     sops decrypt --extract "[\"files\"][\"$name\"]" "$file" |
-      ssh "$target" "umask 077 && cat > \"\$HOME/.faclab-incoming/secrets/$name\""
+      "${ssh_command[@]}" "$target" "umask 077 && cat > \"\$HOME/.faclab-incoming/secrets/$name\""
   done
   echo "Copied to $target:~/.faclab-incoming. On the server, from the faclab-infra checkout:"
   echo "  sudo deploy/production/scripts/stack.sh install-secrets $environment"

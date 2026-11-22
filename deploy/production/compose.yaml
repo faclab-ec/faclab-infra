@@ -37,6 +37,9 @@ x-core-env: &core-env
   DATABASE_URL_WORKER: postgresql://faclab_worker:${CORE_DB_WORKER_PASSWORD:?}@postgres:5432/faclab
   CORS_ORIGINS: https://${APP_DOMAIN:?}
   JWT_PRIVATE_KEY_FILE: /run/secrets/jwt_private_key
+  # Only while rotating the signing key: the previous public key, still accepted and published
+  # (README, rotation). Public keys aren't secret: env/<environment>.env
+  JWT_PUBLIC_KEYS: ${JWT_PUBLIC_KEYS:-}
   SECRET_ENCRYPTION_KEYS_FILE: /run/secrets/secret_encryption_keys
   INTEGRATION_ENVIRONMENT: ${INTEGRATION_ENVIRONMENT:?}
   # The API refuses to request invoices with Kafka off; RUN_BACKGROUND=false keeps it from connecting

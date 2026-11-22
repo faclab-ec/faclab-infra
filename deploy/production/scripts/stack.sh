@@ -12,6 +12,8 @@
 #                                           database (db_roles), and both migrations
 #   stack.sh up                             start or update every service and wait until healthy
 #   stack.sh install                        build, migrate and up: the first installation
+#   stack.sh postgres-password              give the postgres superuser the password of
+#                                           /etc/faclab/secrets/postgres_password (rotation)
 #   stack.sh status                         containers, and the Collector's health_check
 #   stack.sh logs [service...]              follow the logs
 #   stack.sh compose <args...>              any docker compose command on the stack
@@ -134,6 +136,17 @@ up() {
   compose up -d --remove-orphans --wait --wait-timeout 600
 }
 
+# The image reads postgres_password only when it creates the database: a new one reaches the role
+# through ALTER ROLE, over stdin (never in a command line). Hex, so it needs no quoting
+postgres_password() {
+  local password
+  password="$(cat "$SECRET_FILES/postgres_password")"
+  [[ "$password" =~ ^[0-9a-f]+$ ]] || die "postgres_password must be hex (secrets.sh generate hex)"
+  printf "ALTER ROLE postgres PASSWORD '%s';\n" "$password" |
+    compose exec -T postgres psql -v ON_ERROR_STOP=1 -q -U postgres -d postgres
+  echo "postgres: password changed"
+}
+
 status() {
   compose ps --all
   # The Collector's image has no shell for a Docker healthcheck: ask its health_check extension
@@ -149,7 +162,7 @@ status() {
 main() {
   local command="${1:-}"
   [ -n "$command" ] || {
-    sed -n '2,19p' "${BASH_SOURCE[0]}"
+    sed -n '2,21p' "${BASH_SOURCE[0]}"
     exit 1
   }
   shift
@@ -166,6 +179,7 @@ main() {
       up
       status
       ;;
+    postgres-password) postgres_password ;;
     status) status ;;
     logs) compose logs -f --tail=100 "$@" ;;
     compose) compose "$@" ;;
