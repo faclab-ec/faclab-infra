@@ -1,0 +1,4 @@
+# Global options when CADDY_TLS_MODE=acme (production): Let's Encrypt (and ZeroSSL as fallback)
+# issue the certificates of APP_DOMAIN and API_DOMAIN; they need the A records pointing here and
+# ports 80 and 443 open. ACME_EMAIL gets the expiry notices
+email {$ACME_EMAIL}

@@ -1,0 +1,139 @@
+# The edge of Faclab (S8.1, ADR-0011; D-9): two sites, every value from the environment
+# (compose.yaml, env/<environment>.env).
+#
+#   APP_DOMAIN  faclab-web (web:8080) and /otlp, the browser's telemetry, to the Collector (:4318)
+#   API_DOMAIN  faclab-core (core-api:8080) and, by path, faclab-invoicing (invoicing-api:3173)
+#
+# {$VAR} is replaced when the file is read; {remote_host} is the client's IP on each request.
+# Limits by IP use the caddy-ratelimit module (caddy/Dockerfile): over the limit, 429 with
+# Retry-After. Bodies over the limit get 413.
+{
+	# CADDY_TLS_MODE: acme (Let's Encrypt, production) or internal (Caddy's CA, staging)
+	import tls-{$CADDY_TLS_MODE:acme}.caddy
+}
+
+# On both sites. The applications set their own headers too (faclab-core: nosniff,
+# Referrer-Policy, X-Frame-Options); these cover every response, also the errors of Caddy
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age={$HSTS_MAX_AGE:31536000}"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+}
+
+# JSON access log on stdout. Caddy leaves out Authorization and Cookie by default
+(access_log) {
+	log {
+		output stdout
+		format json
+	}
+}
+
+{$APP_DOMAIN} {
+	import security_headers
+	import access_log
+
+	header {
+		# CSP_HEADER is Content-Security-Policy, or Content-Security-Policy-Report-Only to try a
+		# change without breaking the application. Product images can come from any https URL
+		{$CSP_HEADER:Content-Security-Policy} "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://{$API_DOMAIN}; worker-src 'self' blob:; manifest-src 'self'; frame-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+		X-Frame-Options DENY
+	}
+
+	rate_limit {
+		zone app_ip {
+			match {
+				not path /otlp/*
+			}
+			key {remote_host}
+			events {$RATE_LIMIT_APP_EVENTS:600}
+			window 1m
+		}
+		zone otlp_ip {
+			match {
+				path /otlp/*
+			}
+			key {remote_host}
+			events {$RATE_LIMIT_OTLP_EVENTS:120}
+			window 1m
+		}
+	}
+
+	# The browser's OTLP/HTTP (S7.3): /otlp/v1/traces and /otlp/v1/metrics to the Collector's
+	# receiver, which only keeps service.name=faclab-web. Same body limit as the receiver
+	handle_path /otlp/* {
+		request_body {
+			max_size 1MiB
+		}
+		reverse_proxy collector:4318
+	}
+
+	handle {
+		request_body {
+			max_size 1MiB
+		}
+		reverse_proxy web:8080 {
+			lb_try_duration 10s
+		}
+	}
+}
+
+{$API_DOMAIN} {
+	import security_headers
+	import access_log
+	encode zstd gzip
+
+	rate_limit {
+		# Logins and client credentials: core also locks a username or an IP after failures
+		zone login_ip {
+			match {
+				path /api/auth/login /api/oauth/token
+			}
+			key {remote_host}
+			events {$RATE_LIMIT_LOGIN_EVENTS:20}
+			window 1m
+		}
+		# Everything else; the public API also limits each client and company (S6.3)
+		zone api_ip {
+			key {remote_host}
+			events {$RATE_LIMIT_API_EVENTS:1200}
+			window 1m
+		}
+	}
+
+	# Readiness tells what is down: only the Collector and Docker ask it, inside the network
+	@health path /health /health/*
+	handle @health {
+		respond 404
+	}
+
+	# Bulk import takes up to 10 MiB plus the form (core: IMPORT_MAX_FILE_BYTES + 64 KiB); the rest
+	# up to 2 MiB. core and invoicing still apply their own limits
+	@imports path /api/admin/imports /api/admin/imports/*
+	request_body @imports {
+		max_size 11MiB
+	}
+	@not_imports not path /api/admin/imports /api/admin/imports/*
+	request_body @not_imports {
+		max_size 2MiB
+	}
+
+	# faclab-invoicing: its public API (/api/v1/invoices, PUBLIC_API.md) and the routes of the
+	# application (/api/invoices, /api/invoicing/status, /api/certificates, /api/company-config,
+	# /api/sequences). Everything else is faclab-core's
+	@invoicing path /api/v1/invoices* /api/invoices* /api/invoicing* /api/certificates* /api/company-config* /api/sequences*
+	handle @invoicing {
+		reverse_proxy invoicing-api:3173 {
+			lb_try_duration 10s
+		}
+	}
+
+	handle {
+		reverse_proxy core-api:8080 {
+			lb_try_duration 10s
+		}
+	}
+}
