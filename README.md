@@ -44,13 +44,19 @@ faclab-infra/
 ├── garage/
 │   └── garage.toml             # Configuracion de Garage (un nodo, sin replicacion)
 ├── observability/
-│   ├── docker-compose.signoz.yml  # Une el collector de SigNoz a faclab_network y le quita los puertos del host
-│   └── otel-collector/
-│       └── config.yaml            # Configuración del OTel Collector (receptores, redacción, envío a SigNoz)
+│   ├── otel-collector/
+│   │   └── config.yaml            # Configuración del OTel Collector (receptores, redacción, envío a SigNoz)
+│   ├── runbooks/                  # Un runbook por alerta (síntoma, diagnóstico, acción, escalamiento)
+│   └── signoz/
+│       ├── casting.yaml           # SigNoz local con Foundry: versiones, SMTP, red y puertos
+│       ├── dashboards/            # Los seis dashboards de Faclab (SigNoz v6)
+│       ├── alerts/                # Las alertas (reglas v2alpha1), con su runbook
+│       └── pruebas-de-alertas.md  # Cómo se provocó cada alerta y la evidencia
 ├── scripts/
 │   ├── create-topics.sh        # Crea los tópicos de Kafka con varias particiones
 │   ├── init-invoicing-db.sh    # Crea el rol y las bases de faclab-invoicing
-│   └── signoz.sh               # Levanta SigNoz local (up, down, status, config)
+│   ├── signoz.sh               # SigNoz local (up, down, status, config) y dashboards y alertas (check, sync, verify)
+│   └── signoz-sync.py          # Sincroniza canales, dashboards y alertas con la API de SigNoz
 ```
 
 ## Conexion desde microservicios
@@ -246,8 +252,11 @@ Basta cambiar su variable de endpoint:
 - faclab-core: `OTEL_OTLP_ENDPOINT=http://signoz-otel-collector:4317`.
 - faclab-invoicing en un contenedor: `OTEL_EXPORTER_OTLP_ENDPOINT=http://signoz-otel-collector:4317`.
 
-Así se pierden las métricas de infraestructura y la segunda capa de redacción. Desde el host no hay
-camino directo, porque el overlay le quita a SigNoz sus puertos.
+Así se pierden las métricas de infraestructura y la segunda capa de redacción.
+
+- `signoz-otel-collector` es un alias del ingester de SigNoz en `faclab_network`. Lo agrega
+  `observability/signoz/casting.yaml` para que este camino y `SIGNOZ_OTLP_ENDPOINT` no cambien con Foundry.
+- Desde el host no hay camino directo: el ingester no publica puertos.
 
 ### En producción
 
@@ -260,23 +269,59 @@ Queda para S8.1 (VPS) y S8.6 (SigNoz):
 
 ## SigNoz local (observabilidad)
 
-`scripts/signoz.sh` levanta [SigNoz](https://signoz.io) para ver trazas, métricas y logs de los servicios.
-Usa el Docker Compose del propio SigNoz más `observability/docker-compose.signoz.yml`, que une su
-collector de OpenTelemetry a `faclab_network` y le quita los puertos del host (`ports: !reset []`,
-Compose 2.24 o más nuevo). Así `4317` y `4318` del host son del Collector de Faclab, que reenvía a
-`signoz-otel-collector:4317`.
+`scripts/signoz.sh` levanta [SigNoz](https://signoz.io) v0.151.0 para ver trazas, métricas y logs de los
+servicios (S7.5).
+
+- **Instalación con Foundry.** Desde v0.130, SigNoz ya no trae un Docker Compose: se instala con
+  [Foundry](https://github.com/SigNoz/foundry). `foundryctl forge` convierte
+  `observability/signoz/casting.yaml` en un compose en `observability/signoz/pours/` (ignorado por git),
+  y el script lo levanta.
+- **`foundryctl` fijado.** El script baja `foundryctl` v0.5.0 de los releases de GitHub, lo verifica
+  contra los sha256 que lleva escritos y lo deja en `.foundry/` (ignorado). El registro anónimo de uso y
+  el aviso de actualizaciones de Foundry quedan apagados.
+- **Patches del `casting.yaml`:**
+  - el ingester (el collector de SigNoz) pierde sus puertos del host y se une a `faclab_network` con el
+    alias `signoz-otel-collector`; así `4317` y `4318` del host son del Collector de Faclab, que le
+    reenvía;
+  - SigNoz se une a `faclab_network` para llegar a Mailpit.
 
 ```bash
-scripts/signoz.sh up       # levanta SigNoz (la primera vez lo clona)
+scripts/signoz.sh up       # forja el casting y levanta SigNoz
 docker compose up -d collector
 scripts/signoz.sh status   # contenedores y endpoints
 scripts/signoz.sh down     # lo detiene; los datos quedan en sus volúmenes
+scripts/signoz.sh config   # forja y valida el compose generado (CI)
 ```
 
-- Busca SigNoz en `../Telemetry`, junto a este repo; `SIGNOZ_DIR` cambia la ruta. Si no existe, clona solo `deploy/` de la etiqueta `SIGNOZ_VERSION` (por defecto `v0.118.0`).
-- Necesita varios GB de memoria libres para Docker (ClickHouse y ZooKeeper).
-- La interfaz queda en [http://localhost:8080](http://localhost:8080).
-- **La primera vez hay que crear la cuenta de administrador en esa interfaz.** Hasta entonces SigNoz no le entrega su configuración a su collector, que no acepta nada; el Collector de Faclab acumula y reintenta. `up` y `status` lo recuerdan mientras falte.
+| Componente | Imagen |
+|------------|--------|
+| SigNoz (API e interfaz) | `signoz/signoz:v0.151.0` |
+| Ingester | `signoz/signoz-otel-collector:v0.144.16` |
+| ClickHouse y ClickHouse Keeper | `clickhouse/clickhouse-server:25.12.5`, `clickhouse/clickhouse-keeper:25.12.5` |
+| Metastore | `postgres:16.16` |
+
+- **Versiones:** son las del chart de Helm 0.151.0 de SigNoz; se actualizan juntas.
+- **Interfaz:** queda en [http://localhost:8080](http://localhost:8080).
+- **Primer arranque.** Hay que crear la cuenta de administrador en esa interfaz: hasta entonces SigNoz no
+  le entrega su configuración al ingester, que no acepta nada, y el Collector de Faclab acumula y
+  reintenta. `up` y `status` lo recuerdan mientras falte.
+- **Recursos:**
+  - Necesita unos 2 GB libres para Docker; ClickHouse es lo más pesado.
+  - Desde v0.151 SigNoz guarda los logs dos veces mientras migra a JSON, así que usa más CPU y disco.
+  - El `casting.yaml` apaga los logs de sistema de ClickHouse (el perfilador `trace_log`, `text_log`,
+    `metric_log` y otros), que Foundry enciende. En una VM de Docker de 4 GB ocupaban varios núcleos
+    y dejaban sin aire al resto. Quedan `query_log` y `part_log`.
+- **SMTP de las alertas:** el `.env` (`SIGNOZ_SMTP_*`; por defecto Mailpit, sin TLS). Las alertas que
+  llegan por correo se ven en [http://localhost:8025](http://localhost:8025).
+- **Volver a v0.118** (la instalación anterior, con compose):
+  1. `scripts/signoz.sh down`;
+  2. `git -C ../Telemetry switch --detach v0.118.0`;
+  3. usar el `scripts/signoz.sh` y el `observability/docker-compose.signoz.yml` de la versión anterior de
+     este repo.
+
+  Sus volúmenes (`signoz-clickhouse`, `signoz-sqlite`, `signoz-zookeeper-1`) son otros y no se tocan.
+  `../Telemetry` ya no hace falta para levantar SigNoz: queda como referencia del código de la versión
+  desplegada.
 
 Para que los servicios exporten, ver el detalle en el `.env.example` y el README de cada uno:
 
@@ -288,6 +333,71 @@ Para que los servicios exporten, ver el detalle en el `.env.example` y el README
 | faclab-web (`npm start`) | `VITE_OTEL_ENABLED=true`; el proxy de Vite lleva `/otlp` a `http://localhost:4318` |
 
 Con todo arriba, una venta del POS se ve en SigNoz como una sola traza: el request en faclab-core, `send sales.confirmed`, `process sales.confirmed` en faclab-invoicing, `send invoices` y `process invoices` de vuelta en faclab-core.
+
+## Dashboards y alertas
+
+Los dashboards, las alertas y los canales de notificación de SigNoz viven como archivos en
+`observability/signoz/` (S7.5, OBSERVABILITY.md §7–§8 del core). Cada alerta enlaza a su runbook en
+`observability/runbooks/`.
+
+| Dashboard | Pregunta que responde |
+|-----------|-----------------------|
+| Faclab · Ecosistema | ¿Está sano el sistema ahora? Disponibilidad, 5xx, latencia, colas y el navegador (errores de interfaz y web vitals) |
+| Faclab · API Core | ¿Qué ruta o dependencia degrada la experiencia? |
+| Faclab · Kafka y mensajería | ¿Fluyen los mensajes? Outbox, envíos, consumo, lag y mensajes fallidos |
+| Faclab · Facturación electrónica | ¿Se autorizan los comprobantes a tiempo? Cola, SRI, rechazos, entregas y certificados |
+| Faclab · Base de datos e infraestructura | ¿Hay saturación? Host, contenedores, PostgreSQL y Kafka |
+| Faclab · Calidad de operaciones | ¿Qué necesita intervención? Ventas fallidas, stock, conciliación, webhooks y logins |
+
+Las 22 alertas y sus umbrales iniciales están en el [índice de runbooks](observability/runbooks/README.md).
+Son provisionales hasta tener la línea base del piloto (S9.2).
+
+### Importarlos
+
+1. En SigNoz: *Settings → Service Accounts*. Crea una cuenta, asígnale el rol **Admin** y genera su llave
+   de API. Una cuenta sin rol recibe 403 en todo.
+2. En el `.env`:
+   - `SIGNOZ_API_KEY`: la llave;
+   - `ALERT_EMAIL_TO`: los destinatarios de todas las alertas;
+   - opcional, `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID`: el canal de las críticas.
+
+   Esos valores no van al repositorio.
+3. Corre los comandos:
+
+```bash
+scripts/signoz.sh check            # sin red: estructura, descripciones de los paneles, runbooks (CI)
+scripts/signoz.sh sync --dry-run   # qué crearía o cambiaría
+scripts/signoz.sh sync             # crea o actualiza canales, dashboards y alertas
+scripts/signoz.sh verify           # corre cada consulta de paneles y alertas en SigNoz
+```
+
+`sync` es idempotente:
+
+- reconoce cada dashboard por su `name` (`faclab-<slug>`) y cada alerta por su etiqueta
+  `faclab_rule`;
+- crea lo que falta, actualiza lo que difiere y deja igual lo demás;
+- con `--prune` borra los dashboards y alertas de Faclab que ya no tienen archivo.
+
+Un dashboard bloqueado en la interfaz no se actualiza: hay que desbloquearlo.
+
+| Canal | Nivel | Variables |
+|-------|-------|-----------|
+| `faclab-correo` | Advertencias y críticas | `ALERT_EMAIL_TO`; el envío usa el SMTP de SigNoz (`SIGNOZ_SMTP_*`) |
+| `faclab-telegram` | Solo críticas | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` |
+
+Las alertas nombran sus canales por el nombre visible, que el script hace igual al `name`. Si un canal no
+está configurado, `sync` lo quita de las alertas y lo avisa.
+
+### Cambiarlos
+
+- **Desde los archivos.** Se edita el JSON y se corre `sync`.
+- **Desde la interfaz.** Se exporta el dashboard (JSON) y se reemplaza su archivo, conservando
+  `name` y el tag `faclab:observabilidad`.
+- **Cada panel** dice en su descripción su consulta, su unidad, su umbral y la acción; `check` falla si
+  falta alguna.
+- **Volver atrás** es reimportar la versión anterior de los archivos con `sync`.
+
+Cómo se provocó cada alerta y la evidencia: [pruebas de alertas](observability/signoz/pruebas-de-alertas.md).
 
 ## Correo de desarrollo
 
@@ -317,7 +427,8 @@ Cada PR y cada push a `master` corren `.github/workflows/ci.yml` en GitHub Actio
 - valida `docker-compose.yml` con las variables de `.env.example`;
 - valida la configuración del Collector con su imagen fijada (`otelcol validate`, con los volúmenes y variables del servicio);
 - revisa los scripts con ShellCheck;
-- valida el compose de SigNoz con `observability/docker-compose.signoz.yml` (`scripts/signoz.sh config`).
+- forja `observability/signoz/casting.yaml` con el `foundryctl` fijado y valida el compose generado (`scripts/signoz.sh config`);
+- valida los dashboards, las alertas y los runbooks sin red (`scripts/signoz-sync.py check`).
 
 Para correr lo mismo en local:
 
@@ -326,6 +437,7 @@ docker compose --env-file .env.example config -q
 docker compose --env-file .env.example run --rm --no-deps collector validate --config=/etc/otelcol-contrib/config.yaml
 shellcheck scripts/*.sh   # o: docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable scripts/*.sh
 scripts/signoz.sh config
+python3 scripts/signoz-sync.py check
 ```
 
 ## Comandos utiles

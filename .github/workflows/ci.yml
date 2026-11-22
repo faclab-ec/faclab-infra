@@ -34,6 +34,12 @@ jobs:
       - name: ShellCheck
         run: shellcheck scripts/*.sh
 
-      # Clones SigNoz's deploy/ at the pinned tag and validates it with our overlay
+      # Downloads the pinned foundryctl (checked against its sha256), forges
+      # observability/signoz/casting.yaml and validates the generated compose file (S7.5)
       - name: Validate SigNoz local
-        run: SIGNOZ_DIR="$RUNNER_TEMP/signoz" scripts/signoz.sh config
+        run: scripts/signoz.sh config
+
+      # Dashboards (v6), alerts (v2alpha1) and runbooks, offline: structure, panel descriptions,
+      # runbook links and the index (S7.5)
+      - name: Validate dashboards and alerts
+        run: python3 scripts/signoz-sync.py check

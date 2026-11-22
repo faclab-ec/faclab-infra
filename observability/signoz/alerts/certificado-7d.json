@@ -1,0 +1,99 @@
+{
+  "alert": "Certificado de firma por vencer en 7 días o vencido",
+  "alertType": "METRIC_BASED_ALERT",
+  "description": "El certificado seleccionado de alguna empresa vence en 7 días o menos, o ya venció.",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "source": "",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "faclab.certificates.expiring",
+                "temporality": "",
+                "timeAggregation": "latest",
+                "spaceAggregation": "max"
+              }
+            ],
+            "disabled": false,
+            "filter": {
+              "expression": "window IN ('7d', 'expired')"
+            },
+            "groupBy": [
+              {
+                "name": "window",
+                "fieldContext": "attribute",
+                "fieldDataType": "string"
+              },
+              {
+                "name": "deployment.environment.name",
+                "fieldContext": "resource",
+                "fieldDataType": "string"
+              }
+            ],
+            "order": [],
+            "having": {
+              "expression": ""
+            },
+            "functions": [],
+            "legend": ""
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "critical",
+          "op": "above",
+          "matchType": "last",
+          "target": 0,
+          "channels": [
+            "faclab-correo",
+            "faclab-telegram"
+          ]
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "1h",
+      "frequency": "1h"
+    }
+  },
+  "notificationSettings": {
+    "groupBy": [
+      "window"
+    ],
+    "usePolicy": false,
+    "renotify": {
+      "enabled": true,
+      "interval": "24h",
+      "alertStates": [
+        "firing"
+      ]
+    }
+  },
+  "labels": {
+    "faclab_rule": "certificado-7d"
+  },
+  "annotations": {
+    "summary": "Certificado de firma por vencer en 7 días o vencido",
+    "description": "El certificado seleccionado de alguna empresa vence en 7 días o menos, o ya venció. Valor: {{$value}} (umbral {{$threshold}}). Runbook: https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/certificado-por-vencer.md",
+    "runbook_url": "https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/certificado-por-vencer.md"
+  },
+  "disabled": false
+}

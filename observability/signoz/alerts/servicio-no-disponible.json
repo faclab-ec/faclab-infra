@@ -1,0 +1,104 @@
+{
+  "alert": "Servicio no disponible",
+  "alertType": "METRIC_BASED_ALERT",
+  "description": "Un chequeo de salud (/health/ready del core, /health de la facturación) no responde 2xx durante 2 minutos.",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "source": "",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "httpcheck.status",
+                "temporality": "",
+                "timeAggregation": "avg",
+                "spaceAggregation": "min"
+              }
+            ],
+            "disabled": false,
+            "filter": {
+              "expression": "http.status_class = '2xx'"
+            },
+            "groupBy": [
+              {
+                "name": "http.url",
+                "fieldContext": "attribute",
+                "fieldDataType": "string"
+              },
+              {
+                "name": "deployment.environment.name",
+                "fieldContext": "resource",
+                "fieldDataType": "string"
+              }
+            ],
+            "order": [],
+            "having": {
+              "expression": ""
+            },
+            "functions": [],
+            "legend": ""
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "critical",
+          "op": "below",
+          "matchType": "all_the_times",
+          "target": 1,
+          "channels": [
+            "faclab-correo",
+            "faclab-telegram"
+          ]
+        }
+      ]
+    },
+    "requireMinPoints": true,
+    "requiredNumPoints": 1,
+    "alertOnAbsent": true,
+    "absentFor": 5
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "2m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "groupBy": [
+      "http.url"
+    ],
+    "usePolicy": false,
+    "renotify": {
+      "enabled": true,
+      "interval": "4h",
+      "alertStates": [
+        "firing",
+        "nodata"
+      ]
+    }
+  },
+  "labels": {
+    "faclab_rule": "servicio-no-disponible"
+  },
+  "annotations": {
+    "summary": "Servicio no disponible",
+    "description": "Un chequeo de salud (/health/ready del core, /health de la facturación) no responde 2xx durante 2 minutos. Valor: {{$value}} (umbral {{$threshold}}). Runbook: https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/servicio-no-disponible.md",
+    "runbook_url": "https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/servicio-no-disponible.md"
+  },
+  "disabled": false
+}

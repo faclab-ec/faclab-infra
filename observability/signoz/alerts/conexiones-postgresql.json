@@ -1,0 +1,147 @@
+{
+  "alert": "Conexiones de PostgreSQL sobre el 80 %",
+  "alertType": "METRIC_BASED_ALERT",
+  "description": "Un servidor PostgreSQL usa más del 80 % de su max_connections.",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "source": "",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "postgresql.backends",
+                "temporality": "",
+                "timeAggregation": "avg",
+                "spaceAggregation": "sum"
+              }
+            ],
+            "disabled": true,
+            "filter": {
+              "expression": ""
+            },
+            "groupBy": [
+              {
+                "name": "server.address",
+                "fieldContext": "resource",
+                "fieldDataType": "string"
+              },
+              {
+                "name": "deployment.environment.name",
+                "fieldContext": "resource",
+                "fieldDataType": "string"
+              }
+            ],
+            "order": [],
+            "having": {
+              "expression": ""
+            },
+            "functions": [],
+            "legend": ""
+          }
+        },
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "B",
+            "signal": "metrics",
+            "source": "",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "postgresql.connection.max",
+                "temporality": "",
+                "timeAggregation": "avg",
+                "spaceAggregation": "max"
+              }
+            ],
+            "disabled": true,
+            "filter": {
+              "expression": ""
+            },
+            "groupBy": [
+              {
+                "name": "server.address",
+                "fieldContext": "resource",
+                "fieldDataType": "string"
+              },
+              {
+                "name": "deployment.environment.name",
+                "fieldContext": "resource",
+                "fieldDataType": "string"
+              }
+            ],
+            "order": [],
+            "having": {
+              "expression": ""
+            },
+            "functions": [],
+            "legend": ""
+          }
+        },
+        {
+          "type": "builder_formula",
+          "spec": {
+            "name": "F1",
+            "expression": "A / B * 100",
+            "disabled": false,
+            "legend": ""
+          }
+        }
+      ],
+      "unit": "percent"
+    },
+    "selectedQueryName": "F1",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "op": "above",
+          "matchType": "last",
+          "target": 80,
+          "channels": [
+            "faclab-correo"
+          ]
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "5m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "groupBy": [
+      "server.address"
+    ],
+    "usePolicy": false,
+    "renotify": {
+      "enabled": true,
+      "interval": "4h",
+      "alertStates": [
+        "firing"
+      ]
+    }
+  },
+  "labels": {
+    "faclab_rule": "conexiones-postgresql"
+  },
+  "annotations": {
+    "summary": "Conexiones de PostgreSQL sobre el 80 %",
+    "description": "Un servidor PostgreSQL usa más del 80 % de su max_connections. Valor: {{$value}} (umbral {{$threshold}}). Runbook: https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/conexiones-postgresql.md",
+    "runbook_url": "https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/conexiones-postgresql.md"
+  },
+  "disabled": false
+}

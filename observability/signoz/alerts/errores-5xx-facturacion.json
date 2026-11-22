@@ -1,0 +1,147 @@
+{
+  "alert": "Errores 5xx sostenidos en faclab-invoicing",
+  "alertType": "METRIC_BASED_ALERT",
+  "description": "Más del 2 % de las respuestas de faclab-invoicing son 5xx en 10 minutos, con al menos 20 solicitudes.",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "source": "",
+            "stepInterval": 600,
+            "aggregations": [
+              {
+                "metricName": "http.server.duration.count",
+                "temporality": "",
+                "timeAggregation": "increase",
+                "spaceAggregation": "sum"
+              }
+            ],
+            "disabled": true,
+            "filter": {
+              "expression": "service.name = 'faclab-invoicing' AND http.status_code LIKE '5%'"
+            },
+            "groupBy": [
+              {
+                "name": "deployment.environment.name",
+                "fieldContext": "resource",
+                "fieldDataType": "string"
+              }
+            ],
+            "order": [],
+            "having": {
+              "expression": ""
+            },
+            "functions": [],
+            "legend": ""
+          }
+        },
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "B",
+            "signal": "metrics",
+            "source": "",
+            "stepInterval": 600,
+            "aggregations": [
+              {
+                "metricName": "http.server.duration.count",
+                "temporality": "",
+                "timeAggregation": "increase",
+                "spaceAggregation": "sum"
+              }
+            ],
+            "disabled": true,
+            "filter": {
+              "expression": "service.name = 'faclab-invoicing'"
+            },
+            "groupBy": [
+              {
+                "name": "deployment.environment.name",
+                "fieldContext": "resource",
+                "fieldDataType": "string"
+              }
+            ],
+            "order": [],
+            "having": {
+              "expression": "__result >= 20"
+            },
+            "functions": [],
+            "legend": ""
+          }
+        },
+        {
+          "type": "builder_formula",
+          "spec": {
+            "name": "F1",
+            "expression": "A / B * 100",
+            "disabled": false,
+            "legend": ""
+          }
+        }
+      ],
+      "unit": "percent"
+    },
+    "selectedQueryName": "F1",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "op": "above",
+          "matchType": "at_least_once",
+          "target": 2,
+          "channels": [
+            "faclab-correo"
+          ]
+        },
+        {
+          "name": "critical",
+          "op": "above",
+          "matchType": "at_least_once",
+          "target": 5,
+          "channels": [
+            "faclab-correo",
+            "faclab-telegram"
+          ]
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "10m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "groupBy": [
+      "deployment.environment.name"
+    ],
+    "usePolicy": false,
+    "renotify": {
+      "enabled": true,
+      "interval": "4h",
+      "alertStates": [
+        "firing"
+      ]
+    }
+  },
+  "labels": {
+    "faclab_rule": "errores-5xx-facturacion"
+  },
+  "annotations": {
+    "summary": "Errores 5xx sostenidos en faclab-invoicing",
+    "description": "Más del 2 % de las respuestas de faclab-invoicing son 5xx en 10 minutos, con al menos 20 solicitudes. Valor: {{$value}} (umbral {{$threshold}}). Runbook: https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/errores-5xx.md",
+    "runbook_url": "https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/errores-5xx.md"
+  },
+  "disabled": false
+}

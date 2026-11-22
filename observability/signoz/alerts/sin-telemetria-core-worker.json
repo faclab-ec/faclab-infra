@@ -1,0 +1,88 @@
+{
+  "alert": "Sin telemetría de faclab-core-worker",
+  "alertType": "METRIC_BASED_ALERT",
+  "description": "SigNoz no recibe en 10 minutos el latido de métricas de faclab-core-worker (db.client.connection.count).",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "source": "",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "db.client.connection.count",
+                "temporality": "",
+                "timeAggregation": "avg",
+                "spaceAggregation": "sum"
+              }
+            ],
+            "disabled": false,
+            "filter": {
+              "expression": "service.name = 'faclab-core-worker'"
+            },
+            "groupBy": [],
+            "order": [],
+            "having": {
+              "expression": ""
+            },
+            "functions": [],
+            "legend": ""
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "op": "below",
+          "matchType": "last",
+          "target": -1,
+          "channels": [
+            "faclab-correo"
+          ]
+        }
+      ]
+    },
+    "alertOnAbsent": true,
+    "absentFor": 10
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "10m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "groupBy": [],
+    "usePolicy": false,
+    "renotify": {
+      "enabled": true,
+      "interval": "4h",
+      "alertStates": [
+        "firing",
+        "nodata"
+      ]
+    }
+  },
+  "labels": {
+    "faclab_rule": "sin-telemetria-core-worker"
+  },
+  "annotations": {
+    "summary": "Sin telemetría de faclab-core-worker",
+    "description": "SigNoz no recibe en 10 minutos el latido de métricas de faclab-core-worker (db.client.connection.count). Valor: {{$value}} (umbral {{$threshold}}). Runbook: https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/sin-telemetria.md",
+    "runbook_url": "https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/sin-telemetria.md"
+  },
+  "disabled": false
+}

@@ -27,15 +27,26 @@ receivers:
   host_metrics:
     root_path: /hostfs
     collection_interval: 30s
+    # The utilization metrics (0 to 1) are optional; the infrastructure dashboard and the disk
+    # alert use them (S7.5)
     scrapers:
       cpu:
+        metrics:
+          system.cpu.utilization:
+            enabled: true
       load:
       memory:
+        metrics:
+          system.memory.utilization:
+            enabled: true
       paging:
       disk:
       network:
       filesystem:
         include_virtual_filesystems: true
+        metrics:
+          system.filesystem.utilization:
+            enabled: true
         exclude_fs_types:
           match_type: regexp
           fs_types: ["^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fuse.*|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs|tmpfs|virtiofs)$"]
