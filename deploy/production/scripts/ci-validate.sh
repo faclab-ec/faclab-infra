@@ -36,6 +36,8 @@ compose() {
     --env-file "$DEPLOY/secrets.env.example" "$@"
 }
 
+STAGING_ENV="$DEPLOY/env/staging.env"
+
 echo "== compose.yaml"
 for env_file in "$DEPLOY/env/staging.env" "$DEPLOY/env/production.env.example"; do
   compose "$env_file" --profile tasks config -q
@@ -43,12 +45,33 @@ for env_file in "$DEPLOY/env/staging.env" "$DEPLOY/env/production.env.example"; 
   echo "ok: $(basename "$env_file")"
 done
 
+# What S7.6 asked of the deployment (OBSERVABILITY.md §10): each image built with its version, and
+# every service exporting to the Collector, not to localhost
+rendered="$(compose "$STAGING_ENV" -f "$DEPLOY/compose.build.yml" --profile tasks config)"
+for expected in "OTEL_OTLP_ENDPOINT: http://collector:4317" \
+  "OTEL_EXPORTER_OTLP_ENDPOINT: http://collector:4317" "SERVICE_VERSION:"; do
+  if ! grep -qF "$expected" <<< "$rendered"; then
+    echo "compose.yaml or compose.build.yml lost '$expected'" >&2
+    exit 1
+  fi
+done
+if [ "$(grep -c 'SERVICE_VERSION:' <<< "$rendered")" -lt 3 ]; then
+  echo "compose.build.yml must pass SERVICE_VERSION to the core, invoicing and web builds" >&2
+  exit 1
+fi
+echo "ok: SERVICE_VERSION and the Collector's endpoint"
+
 echo "== Caddy"
-STAGING="$DEPLOY/env/staging.env"
+STAGING="$STAGING_ENV"
 compose "$STAGING" build -q caddy
 for mode in acme internal; do
-  compose "$STAGING" run --rm --no-deps -e CADDY_TLS_MODE="$mode" -e ACME_EMAIL=ops@example.com \
-    caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile 2>&1 | tail -n 1
+  output="$(compose "$STAGING" run --rm --no-deps -e CADDY_TLS_MODE="$mode" -e ACME_EMAIL=ops@example.com \
+    caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile 2>&1)"
+  if ! grep -q "Valid configuration" <<< "$output"; then
+    printf '%s\n' "$output" >&2
+    exit 1
+  fi
+  echo "ok: Caddyfile with CADDY_TLS_MODE=$mode"
 done
 compose "$STAGING" run --rm --no-deps caddy caddy fmt --diff /etc/caddy/Caddyfile > /dev/null ||
   {
