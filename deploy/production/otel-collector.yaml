@@ -1,0 +1,23 @@
+# Production overlay of the OTel Collector (S8.1): compose.yaml passes it as a second --config after
+# observability/otel-collector/config.yaml. The Collector merges both files: maps are merged key by
+# key and lists are replaced whole, and nothing can be deleted.
+#
+# - One PostgreSQL server holds both databases, and the postgresql receiver scrapes every database
+#   of its server: postgresql/core (CORE_DB_ENDPOINT=postgres:5432) covers faclab and
+#   faclab_invoicing, and postgresql/invoicing stays defined but out of the pipeline, so nothing is
+#   counted twice.
+# - The health_check extension answers on :13133 (the image has no shell for a Docker healthcheck;
+#   scripts/stack.sh status asks it).
+#
+# Keep the list of the metrics pipeline equal to the base one without postgresql/invoicing:
+# scripts/ci-validate.sh fails otherwise, since a receiver added to the base would be dropped here.
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    metrics:
+      receivers: [otlp, host_metrics, docker_stats, postgresql/core, kafka_metrics, http_check]

@@ -1,0 +1,495 @@
+# Production stack of Faclab on one VPS (S8.1, ADR-0011 of faclab-core). Guide: README.md here.
+#
+# Run it through scripts/stack.sh, which passes the two env files: env/<environment>.env (what isn't
+# secret: domains, images, limits) and /etc/faclab/secrets.env (passwords and keys, root 600). Only
+# caddy publishes ports (80, 443, 443/udp); everything else lives on internal networks:
+#
+#   egress  bridge    caddy, core-api, core-worker, invoicing-worker, collector: they reach the
+#                     Internet (ACME, SMTP, webhooks, the SRI, SigNoz)
+#   proxy   internal  caddy and what it routes to: web, core-api, invoicing-api, collector (/otlp)
+#   data    internal  postgres, kafka, object-storage, the services and the collector
+#
+# Kafka speaks PLAINTEXT only inside `data` (G-49 mitigated by isolation: no port, no kafka-ui).
+# Secrets the applications read from a file are mounted from /etc/faclab/secrets (Compose outside
+# Swarm bind-mounts them as they are: each file belongs to the uid that reads it); the rest come in
+# through interpolation and are visible to `docker inspect` on the host, never in an image.
+
+name: faclab
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+# Long-running services
+x-service: &service
+  restart: unless-stopped
+  logging: *logging
+  security_opt:
+    - no-new-privileges:true
+
+# faclab-core: API, worker and the migrations task share it
+x-core-env: &core-env
+  ENVIRONMENT: ${ENVIRONMENT:?}
+  LOG_LEVEL: ${CORE_LOG_LEVEL:-INFO}
+  DATABASE_URL: postgresql://faclab_app:${CORE_DB_APP_PASSWORD:?}@postgres:5432/faclab
+  DATABASE_URL_WORKER: postgresql://faclab_worker:${CORE_DB_WORKER_PASSWORD:?}@postgres:5432/faclab
+  CORS_ORIGINS: https://${APP_DOMAIN:?}
+  JWT_PRIVATE_KEY_FILE: /run/secrets/jwt_private_key
+  SECRET_ENCRYPTION_KEYS_FILE: /run/secrets/secret_encryption_keys
+  INTEGRATION_ENVIRONMENT: ${INTEGRATION_ENVIRONMENT:?}
+  # The API refuses to request invoices with Kafka off; RUN_BACKGROUND=false keeps it from connecting
+  KAFKA_ENABLED: "true"
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  OTEL_ENABLED: ${OTEL_ENABLED:-true}
+  OTEL_OTLP_ENDPOINT: http://collector:4317
+  OTEL_EXPORTER_OTLP_INSECURE: "true"
+  OTEL_SAMPLING_RATE: ${OTEL_SAMPLING_RATE:-1}
+  EMAIL_ENABLED: ${EMAIL_ENABLED:-false}
+  EMAIL_FROM: ${EMAIL_FROM:-}
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USER: ${SMTP_USER:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  WORKER_HEALTH_FILE: /tmp/faclab-worker-health.json
+
+x-core-secrets: &core-secrets
+  - jwt_private_key
+  - secret_encryption_keys
+
+# faclab-invoicing: API, worker and the migrations task share it
+x-invoicing-env: &invoicing-env
+  NODE_ENV: production
+  LOG_LEVEL: ${INVOICING_LOG_LEVEL:-info}
+  DATABASE_URL: postgresql://faclab_invoicing:${INVOICING_DB_PASSWORD:?}@postgres:5432/faclab_invoicing
+  KAFKA_BROKERS: kafka:9092
+  CORS_ORIGINS: https://${APP_DOMAIN:?}
+  # Inside the network: containers don't resolve nor trust the public names in every environment
+  JWT_JWKS_URL: http://core-api:8080/.well-known/jwks.json
+  CERTIFICATE_PASSWORD_KEY: ${CERTIFICATE_PASSWORD_KEY:?}
+  OBJECT_STORAGE_ENDPOINT: http://object-storage:3900
+  OBJECT_STORAGE_REGION: garage
+  OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-faclab-invoicing}
+  OBJECT_STORAGE_ACCESS_KEY_ID: ${OBJECT_STORAGE_ACCESS_KEY_ID:?}
+  OBJECT_STORAGE_SECRET_ACCESS_KEY: ${OBJECT_STORAGE_SECRET_ACCESS_KEY:?}
+  OBJECT_STORAGE_FORCE_PATH_STYLE: "true"
+  INVOICING_PROVIDER_RUC: ${INVOICING_PROVIDER_RUC:-}
+  INVOICE_EMAIL_ENABLED: ${INVOICE_EMAIL_ENABLED:-true}
+  INVOICE_EMAIL_FROM: ${INVOICE_EMAIL_FROM:-}
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USER: ${SMTP_USER:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://collector:4317
+
+services:
+  # The only entry: TLS, routes by domain and path, limits by IP and size, security headers
+  # (caddy/Caddyfile). Built here with the rate limit module (caddy/Dockerfile)
+  caddy:
+    <<: *service
+    build: ./caddy
+    image: faclab-local/caddy:${CADDY_VERSION:-2.11.9}
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?}
+      API_DOMAIN: ${API_DOMAIN:?}
+      CADDY_TLS_MODE: ${CADDY_TLS_MODE:-acme}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+      HSTS_MAX_AGE: ${HSTS_MAX_AGE:-31536000}
+      CSP_HEADER: ${CSP_HEADER:-Content-Security-Policy}
+      RATE_LIMIT_APP_EVENTS: ${RATE_LIMIT_APP_EVENTS:-600}
+      RATE_LIMIT_OTLP_EVENTS: ${RATE_LIMIT_OTLP_EVENTS:-120}
+      RATE_LIMIT_API_EVENTS: ${RATE_LIMIT_API_EVENTS:-1200}
+      RATE_LIMIT_LOGIN_EVENTS: ${RATE_LIMIT_LOGIN_EVENTS:-20}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/tls-acme.caddy:/etc/caddy/tls-acme.caddy:ro
+      - ./caddy/tls-internal.caddy:/etc/caddy/tls-internal.caddy:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    mem_limit: ${CADDY_MEMORY:-128m}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      - web
+      - core-api
+      - invoicing-api
+      - collector
+    networks:
+      - egress
+      - proxy
+
+  # The SPA, served by its own Caddy without TLS; /config.js is written at start from these URLs
+  web:
+    <<: *service
+    image: ${WEB_IMAGE:?}
+    environment:
+      API_BASE_URL: https://${API_DOMAIN:?}
+      INVOICING_API_URL: https://${API_DOMAIN:?}
+      OTEL_ENABLED: ${WEB_OTEL_ENABLED:-true}
+      OTLP_URL: /otlp
+      OTEL_SAMPLING_RATE: ${OTEL_SAMPLING_RATE:-1}
+      ENVIRONMENT: ${ENVIRONMENT:?}
+    read_only: true
+    tmpfs:
+      - /srv/runtime:uid=10001,gid=10001,mode=0755,size=1m
+    cap_drop: [ALL]
+    mem_limit: ${WEB_MEMORY:-64m}
+    networks:
+      - proxy
+
+  core-api:
+    <<: *service
+    image: ${CORE_IMAGE:?}
+    environment:
+      <<: *core-env
+      RUN_BACKGROUND: "false"
+      WEB_CONCURRENCY: ${CORE_WEB_CONCURRENCY:-2}
+    secrets: *core-secrets
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop: [ALL]
+    mem_limit: ${CORE_API_MEMORY:-768m}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - egress
+      - proxy
+      - data
+
+  # Outbox relay, Kafka consumer, webhooks and periodic tasks (ADR-0007)
+  core-worker:
+    <<: *service
+    image: ${CORE_IMAGE:?}
+    command: ["python", "worker.py"]
+    environment: *core-env
+    secrets: *core-secrets
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop: [ALL]
+    mem_limit: ${CORE_WORKER_MEMORY:-512m}
+    stop_grace_period: 30s
+    # With the file as argument the check doesn't import the settings
+    healthcheck:
+      test: ["CMD", "python", "-m", "src.shared.infra.worker.health", "/tmp/faclab-worker-health.json"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-topics:
+        condition: service_completed_successfully
+    networks:
+      - egress
+      - data
+
+  invoicing-api:
+    <<: *service
+    image: ${INVOICING_IMAGE:?}
+    environment:
+      <<: *invoicing-env
+      RUN_BACKGROUND: "false"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop: [ALL]
+    mem_limit: ${INVOICING_API_MEMORY:-384m}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      object-storage:
+        condition: service_healthy
+    networks:
+      - proxy
+      - data
+
+  # Invoices and credit notes to the SRI, Kafka in and out, mail to the buyers. It stops after the
+  # document in progress: up to two SRI calls of SRI_TIMEOUT_MS (30 s)
+  invoicing-worker:
+    <<: *service
+    image: ${INVOICING_IMAGE:?}
+    command: ["node", "-r", "./dist/instrumentation.js", "dist/worker.js"]
+    environment: *invoicing-env
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop: [ALL]
+    mem_limit: ${INVOICING_WORKER_MEMORY:-512m}
+    stop_grace_period: 75s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      object-storage:
+        condition: service_healthy
+      kafka-topics:
+        condition: service_completed_successfully
+    networks:
+      - egress
+      - data
+
+  # One PostgreSQL 17 with two databases: faclab (core: roles and database from core's db_roles,
+  # run by scripts/stack.sh) and faclab_invoicing (role and database from init-invoicing-db.sh)
+  postgres:
+    <<: *service
+    image: postgres:${POSTGRES_VERSION:-17.12}
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${POSTGRES_SHARED_BUFFERS:-384MB}
+      - -c
+      - effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-1GB}
+      - -c
+      - work_mem=${POSTGRES_WORK_MEM:-8MB}
+      - -c
+      - maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-128MB}
+      - -c
+      - max_connections=${POSTGRES_MAX_CONNECTIONS:-150}
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_INITDB_ARGS: --data-checksums
+      INVOICING_DB_PASSWORD: ${INVOICING_DB_PASSWORD:?}
+      INVOICING_DATABASES: faclab_invoicing
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../../scripts/init-invoicing-db.sh:/docker-entrypoint-initdb.d/init-invoicing-db.sh:ro
+    shm_size: 256m
+    # The entrypoint prepares its directories as root and then runs as postgres
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID]
+    mem_limit: ${POSTGRES_MEMORY:-1536m}
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - data
+
+  # KRaft, one node, only on the internal network
+  kafka:
+    <<: *service
+    image: confluentinc/cp-kafka:${KAFKA_VERSION:-7.9.0}
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://kafka:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID:?}
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_RETENTION_HOURS: ${KAFKA_LOG_RETENTION_HOURS:-168}
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_HEAP_OPTS: ${KAFKA_HEAP_OPTS:--Xms512m -Xmx512m}
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    cap_drop: [ALL]
+    mem_limit: ${KAFKA_MEMORY:-1g}
+    stop_grace_period: 60s
+    # docker exec inherits KAFKA_HEAP_OPTS: without a small heap each check would start a JVM as
+    # large as the broker's
+    healthcheck:
+      test: ["CMD-SHELL", "KAFKA_HEAP_OPTS=-Xmx64m kafka-broker-api-versions --bootstrap-server localhost:9092 > /dev/null"]
+      interval: 30s
+      timeout: 20s
+      retries: 5
+      start_period: 60s
+    networks:
+      - data
+
+  # Creates the topics (partitions and retention) and exits; idempotent (scripts/create-topics.sh)
+  kafka-topics:
+    image: confluentinc/cp-kafka:${KAFKA_VERSION:-7.9.0}
+    restart: "no"
+    logging: *logging
+    entrypoint: ["/scripts/create-topics.sh"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC_PARTITIONS: ${KAFKA_TOPIC_PARTITIONS:-6}
+      KAFKA_TOPIC_RETENTION_MS: ${KAFKA_TOPIC_RETENTION_MS:-604800000}
+      KAFKA_HEAP_OPTS: -Xmx256m
+    volumes:
+      - ../../scripts/create-topics.sh:/scripts/create-topics.sh:ro
+    cap_drop: [ALL]
+    mem_limit: 512m
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - data
+
+  # S3-compatible storage of the authorized invoices (D-2): Garage, one node. --default-bucket
+  # creates the bucket and the access key of the secrets on its first start
+  object-storage:
+    <<: *service
+    image: dxflrs/garage:${GARAGE_VERSION:-v2.4.1}
+    command: ["/garage", "server", "--single-node", "--default-bucket"]
+    environment:
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET:?}
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN:?}
+      GARAGE_DEFAULT_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY_ID:?}
+      GARAGE_DEFAULT_SECRET_KEY: ${OBJECT_STORAGE_SECRET_ACCESS_KEY:?}
+      GARAGE_DEFAULT_BUCKET: ${OBJECT_STORAGE_BUCKET:-faclab-invoicing}
+    volumes:
+      - ../../garage/garage.toml:/etc/garage.toml:ro
+      - object_storage_data:/var/lib/garage
+    read_only: true
+    cap_drop: [ALL]
+    mem_limit: ${OBJECT_STORAGE_MEMORY:-256m}
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - data
+
+  # The OTel Collector (S7.4): the configuration of development plus otel-collector.yaml, which
+  # keeps one PostgreSQL receiver for the shared server and adds the health_check extension. The
+  # image is distroless (no shell for a healthcheck): scripts/stack.sh status asks :13133
+  collector:
+    <<: *service
+    image: otel/opentelemetry-collector-contrib:${OTEL_COLLECTOR_VERSION:-0.165.0}
+    command:
+      - --config=/etc/otelcol-contrib/config.yaml
+      - --config=/etc/otelcol-contrib/production.yaml
+      - --feature-gates=receiver.postgresql.separateSchemaAttr
+    environment:
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+      OTEL_RESOURCE_ATTRIBUTES: deployment.environment.name=${ENVIRONMENT:?}
+      SIGNOZ_OTLP_ENDPOINT: ${SIGNOZ_OTLP_ENDPOINT:?}
+      SIGNOZ_OTLP_INSECURE: ${SIGNOZ_OTLP_INSECURE:-false}
+      CORE_DB_ENDPOINT: postgres:5432
+      CORE_DB_MONITOR_PASSWORD: ${DB_MONITOR_PASSWORD:?}
+      # Defined in the base configuration but out of the production pipeline
+      INVOICING_DB_ENDPOINT: postgres:5432
+      INVOICING_DB_MONITOR_PASSWORD: ${DB_MONITOR_PASSWORD:?}
+      KAFKA_BROKERS: kafka:9092
+      CORE_HEALTH_URL: http://core-api:8080/health/ready
+      INVOICING_HEALTH_URL: http://invoicing-api:3173/health
+    volumes:
+      - ../../observability/otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - ./otel-collector.yaml:/etc/otelcol-contrib/production.yaml:ro
+      # The host's root, read-only, for host_metrics
+      - /:/hostfs:ro
+    read_only: true
+    cap_drop: [ALL]
+    mem_limit: ${COLLECTOR_MEMORY:-512m}
+    depends_on:
+      - docker-socket-proxy
+    networks:
+      - egress
+      - proxy
+      - data
+      - docker_api
+
+  # The only container with the Docker socket: GET of containers, events, version, info and ping
+  docker-socket-proxy:
+    <<: *service
+    image: tecnativa/docker-socket-proxy:${DOCKER_SOCKET_PROXY_VERSION:-v0.5.0}
+    environment:
+      CONTAINERS: 1
+      INFO: 1
+      EVENTS: 1
+      VERSION: 1
+      PING: 1
+      POST: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    mem_limit: 64m
+    networks:
+      - docker_api
+
+  # One-off tasks (profile tasks), run by scripts/stack.sh migrate before the services start.
+  # db_roles also needs DATABASE_URL_ADMIN, which stack.sh passes only to that run
+  core-migrate:
+    image: ${CORE_IMAGE:?}
+    profiles: [tasks]
+    restart: "no"
+    logging: *logging
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *core-env
+      DATABASE_URL_MIGRATIONS: postgresql://faclab_owner:${CORE_DB_OWNER_PASSWORD:?}@postgres:5432/faclab
+      DATABASE_URL_MONITOR: postgresql://faclab_monitor:${DB_MONITOR_PASSWORD:?}@postgres:5432/faclab
+    secrets: *core-secrets
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop: [ALL]
+    mem_limit: 512m
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - data
+
+  invoicing-migrate:
+    image: ${INVOICING_IMAGE:?}
+    profiles: [tasks]
+    restart: "no"
+    logging: *logging
+    # Without npm: it writes its cache and logs, and the filesystem is read-only
+    command: ["node", "node_modules/node-pg-migrate/bin/node-pg-migrate.js", "-m", "migrations", "up"]
+    environment:
+      DATABASE_URL: postgresql://faclab_invoicing:${INVOICING_DB_PASSWORD:?}@postgres:5432/faclab_invoicing
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop: [ALL]
+    mem_limit: 256m
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - data
+
+secrets:
+  postgres_password:
+    file: ${FACLAB_SECRET_FILES:-/etc/faclab/secrets}/postgres_password
+  jwt_private_key:
+    file: ${FACLAB_SECRET_FILES:-/etc/faclab/secrets}/jwt_private_key.pem
+  secret_encryption_keys:
+    file: ${FACLAB_SECRET_FILES:-/etc/faclab/secrets}/secret_encryption_keys
+
+volumes:
+  caddy_data:
+  caddy_config:
+  postgres_data:
+  kafka_data:
+  object_storage_data:
+
+networks:
+  egress:
+  proxy:
+    internal: true
+  data:
+    internal: true
+  docker_api:
+    internal: true
