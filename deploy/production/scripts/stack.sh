@@ -8,13 +8,12 @@
 #                                           /etc/faclab, with owners and modes, and remember the
 #                                           environment
 #   stack.sh deploy <infra> <core> <invoicing> <web>
-#                                           deploy those versions (tags published in GHCR), with the
-#                                           checkout at v<infra>: images pinned by digest, a backup
+#                                           deploy those versions (tags published in GHCR): the
+#                                           checkout at v<infra>, images pinned by digest, a backup
 #                                           of both databases, migrations (down too, to an older
 #                                           version), the services in order (infra, invoicing, core,
 #                                           web), each checked healthy, and an automatic rollback to
-#                                           what ran before if anything fails (exit 3). remote.sh
-#                                           checks the tag out and runs it
+#                                           what ran before if anything fails (exit 3)
 #   stack.sh rollback                       deploy the previous versions (deployments)
 #   stack.sh deployments                    what runs, what ran before, and the history
 #   stack.sh backups                        the backups taken before each deployment
@@ -122,7 +121,10 @@ repo_git() {
 
 checkout_infra() {
   echo "faclab-infra: checking out v$1"
+  # Tags may be published again (a pre-release), hence --force
+  repo_git fetch --quiet --tags --force origin
   repo_git -c advice.detachedHead=false checkout --quiet --detach "refs/tags/v$1"
+  echo "faclab-infra at v$1 ($(repo_git rev-parse --short HEAD))"
 }
 
 # One deployment at a time. The lock passes to what this script runs or execs (FACLAB_DEPLOY_LOCKED)
@@ -458,9 +460,6 @@ at_tag() {
   grep -qxF "v$1" <<< "$tags"
 }
 
-check_checkout() {
-  at_tag "$1" || die "the checkout of faclab-infra isn't at v$1: deploy through remote.sh, which checks it out"
-}
 
 # The schema back to what the target knows, the migrations, the services and the checks
 change_to() {
@@ -480,7 +479,12 @@ deploy() {
   [ $# = 4 ] || die "usage: stack.sh deploy <infra> <core> <invoicing> <web>"
   for version in "$@"; do valid_version "$version"; done
   take_lock
-  check_checkout "$infra"
+  # The stack of that faclab-infra version, under the lock: its compose.yaml and this script's
+  # version, which takes over (the lock passes on)
+  if ! at_tag "$infra"; then
+    checkout_infra "$infra"
+    exec "$SCRIPT" deploy "$@"
+  fi
   install -d -m 0700 "$STATE"
 
   step "Images"
@@ -508,7 +512,7 @@ deploy() {
   if [ "$status" = 0 ]; then
     [ -f "$current" ] && mv "$current" "$STATE/previous.env"
     mv "$target" "$current"
-    record deployed "$(versions_of "$current") (backup $id)"
+    record "${FACLAB_DEPLOY_KIND:-deployed}" "$(versions_of "$current") (backup $id)"
     prune_images
     printf '\nDeployed: %s\n' "$(versions_of "$current")"
     return 0
@@ -551,12 +555,12 @@ automatic_rollback() {
   fi
   status=$?
   set -e
-  rm -f "$target"
   if [ "$status" != 0 ]; then
     record rollback-failed "$(versions_of "$target") -> $(versions_of "$previous"): services (backup $id)"
     die "the rollback failed too: check stack.sh status. The databases before the deployment are in backup $id"
   fi
   record rolled-back "$(versions_of "$target") failed, $(versions_of "$previous") runs again (backup $id)"
+  rm -f "$target"
   echo "stack.sh: rolled back. $(versions_of "$previous") runs again, as before the deployment" >&2
   exit 3
 }
@@ -571,14 +575,13 @@ apply() {
 }
 
 rollback() {
-  local previous="$STATE/previous.env" infra
+  local previous="$STATE/previous.env"
   take_lock
   [ -f "$previous" ] || die "there is no previous deployment ($previous)"
-  infra="$(file_value "$previous" INFRA_VERSION)"
   echo "Rolling back to $(versions_of "$previous")"
-  at_tag "$infra" || checkout_infra "$infra"
-  # A deployment of those versions, by their script (FACLAB_DEPLOY_LOCKED keeps the lock)
-  exec "$SCRIPT" deploy "$infra" "$(file_value "$previous" CORE_VERSION)" \
+  # A deployment of those versions (it checks out their faclab-infra; the lock passes on)
+  export FACLAB_DEPLOY_KIND=rollback
+  deploy "$(file_value "$previous" INFRA_VERSION)" "$(file_value "$previous" CORE_VERSION)" \
     "$(file_value "$previous" INVOICING_VERSION)" "$(file_value "$previous" WEB_VERSION)"
 }
 

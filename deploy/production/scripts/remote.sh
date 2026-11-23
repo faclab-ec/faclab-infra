@@ -2,8 +2,8 @@
 # The server's entry for deploy.sh (S8.2). It runs as the deploy user, either as the forced command
 # of the CI's SSH key (stack.sh authorize-ci: that key can run nothing else) or by hand:
 #
-#   remote.sh deploy <infra> <core> <invoicing> <web>   check out faclab-infra v<infra> and run its
-#                                                      stack.sh deploy with those versions
+#   remote.sh deploy <infra> <core> <invoicing> <web>   stack.sh deploy, which checks faclab-infra
+#                                                      out at v<infra> under its lock
 #   remote.sh rollback                                 stack.sh rollback
 #   remote.sh status                                   stack.sh status
 #   remote.sh deployments                              stack.sh deployments
@@ -20,9 +20,8 @@ die() {
 }
 
 main() {
-  local here repo stack arguments=() version
+  local here stack arguments=() version
   here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  repo="$(cd "$here/../../.." && pwd)"
   stack="$here/stack.sh"
 
   if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then
@@ -42,11 +41,6 @@ main() {
       for version in "${arguments[@]:1}"; do
         [[ "$version" =~ $SEMVER ]] || die "'$version' isn't a version"
       done
-      # The stack of that faclab-infra version: its compose.yaml, its scripts. Tags may be recreated
-      # (a pre-release published again), hence --force
-      git -C "$repo" fetch --quiet --tags --force origin
-      git -C "$repo" -c advice.detachedHead=false checkout --quiet --detach "refs/tags/v${arguments[1]}"
-      echo "faclab-infra at v${arguments[1]} ($(git -C "$repo" rev-parse --short HEAD))"
       exec sudo "$stack" deploy "${arguments[@]:1}"
       ;;
     rollback | status | deployments)
@@ -57,5 +51,6 @@ main() {
   esac
 }
 
-# On one line: the checkout replaces this file while it runs, and bash reads a script as it goes
+# On one line: a deployment may check out another version of this file while it runs, and bash
+# reads a script as it goes
 main "$@"; exit $?
