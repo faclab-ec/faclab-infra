@@ -18,6 +18,8 @@ flowchart LR
     CW & IW --> K[(kafka)]
     IA & IW --> S3[(object-storage)]
     COL -->|OTLP gRPC| SZ[SigNoz]
+    PG -->|WAL y respaldos, cifrados| EXT[(S3 externo)]
+    S3 -.->|copia cifrada, versionada| EXT
 ```
 
 | Servicio | Imagen | Para qué | Memoria |
@@ -26,12 +28,13 @@ flowchart LR
 | `web` | faclab-web | La aplicación (SPA), con su `config.js` escrito al arrancar | 64 MB |
 | `core-api`, `core-worker` | faclab-core | El API (2 procesos de uvicorn) y el worker (outbox, consumidor de Kafka, webhooks, tareas) | 768 y 512 MB |
 | `invoicing-api`, `invoicing-worker` | faclab-invoicing | El API y el worker que habla con el SRI | 384 y 512 MB |
-| `postgres` | `postgres:17.12` | Las bases `faclab` (core) y `faclab_invoicing` | 1,5 GB |
+| `postgres` | `faclab-postgres`: `postgres:17.12` con pgBackRest (`postgres/Dockerfile`) | Las bases `faclab` (core) y `faclab_invoicing`; archiva el WAL y hace los respaldos fuera del servidor ([RESPALDOS.md](RESPALDOS.md)) | 1,5 GB |
 | `kafka` | `confluentinc/cp-kafka:7.9.0` | KRaft, un nodo, solo en la red interna | 1 GB |
 | `kafka-topics` | la de Kafka | Crea los tópicos y termina | — |
 | `object-storage` | `dxflrs/garage:v2.4.1` | XML, RIDE y logos de facturación (compatible con S3, D-2) | 256 MB |
 | `collector`, `docker-socket-proxy` | `otel/opentelemetry-collector-contrib:0.165.0` | Telemetría de los servicios y del navegador, métricas de infraestructura, envío a SigNoz | 512 MB |
 | `core-migrate`, `invoicing-migrate` | las de core e invoicing | Migraciones, como tareas únicas (perfil `tasks`) | — |
+| `objects-backup` | `rclone/rclone:1.76.0` | Copia cifrada del almacenamiento de objetos fuera del servidor, como tarea (perfil `tasks`, [RESPALDOS.md](RESPALDOS.md)) | 256 MB |
 
 Archivos de esta carpeta:
 
@@ -41,6 +44,10 @@ Archivos de esta carpeta:
 | `versions/staging.env`, `versions/production.env` | La versión de faclab-infra, core, invoicing y web que corre cada entorno (S8.2). Cambiarla es un PR |
 | `COMPATIBILITY.md` | La matriz de compatibilidad: qué publica, acepta y requiere cada versión |
 | `caddy/` | La imagen de Caddy (la publica el release de faclab-infra), el `Caddyfile` y los dos modos de TLS |
+| `postgres/` | La imagen de PostgreSQL con pgBackRest (la publica el release de faclab-infra) y `pgbackrest.conf` (S8.3) |
+| `RESPALDOS.md` | Respaldos y recuperación: qué, dónde y cuándo, RPO y RTO, restauración y simulacro (S8.3) |
+| `systemd/` | Los timers de los respaldos, que instala `scripts/backups.sh` |
+| `drill/` | El sustituto de S3 de staging y de los simulacros, en la Mac (`standin.sh`) |
 | `otel-collector.yaml` | Lo que cambia del Collector en producción (una sola instancia de PostgreSQL, `health_check`) |
 | `env/staging.env`, `env/production.env.example` | La configuración de cada entorno que no es secreta |
 | `secrets.env.example`, `sops.yaml.example` | Los nombres de los secretos y el formato de `.sops.yaml`, sin valores |
@@ -48,7 +55,9 @@ Archivos de esta carpeta:
 | `scripts/secrets.sh` | Genera, edita y envía los secretos (en tu máquina) |
 | `scripts/deploy.sh` | Despliega un entorno o lo revierte (en tu máquina o en el workflow `Deploy`) |
 | `scripts/remote.sh` | La entrada del servidor para `deploy.sh`: el comando forzado de la llave del CI |
-| `scripts/stack.sh` | Despliega, revierte, migra, levanta y revisa el stack (en el servidor) |
+| `scripts/stack.sh` | Despliega, revierte, migra, levanta, restaura y revisa el stack (en el servidor) |
+| `scripts/backups.sh` | Respaldos, copia de comprobantes, su estado y sus métricas (en el servidor, desde los timers) |
+| `scripts/objects-backup.sh` | La copia de objetos dentro de la tarea `objects-backup` |
 | `scripts/compat.py` | Comprueba una combinación de versiones contra la matriz |
 | `scripts/smoke.sh` | Prueba de humo desde fuera |
 | `scripts/ci-validate.sh` | Lo que valida el CI, sin servidor |
@@ -68,6 +77,12 @@ Archivos de esta carpeta:
 - **Imágenes publicadas** (S8.2): cada repositorio publica la suya en GitHub Container Registry al
   etiquetar una versión, para amd64 y arm64. El servidor las descarga y las fija por digest; no
   construye nada.
+- **Respaldos fuera del servidor** (S8.3, [RESPALDOS.md](RESPALDOS.md)):
+  - PostgreSQL con pgBackRest: WAL continuo, un completo semanal y un incremental diario, cifrados,
+    a un bucket externo;
+  - los comprobantes, copiados con cifrado a otro bucket con versionado y Object Lock durante el plazo
+    legal;
+  - alertas si fallan o se atrasan.
 
 ## Requisitos
 
@@ -139,7 +154,7 @@ en tu máquina y llegan al servidor por SSH; el servidor no necesita sops ni la 
 
 | En el servidor | Dueño y modo | Qué lleva | Quién lo lee |
 |---|---|---|---|
-| `/etc/faclab/secrets.env` | root, 0600 | Contraseñas de las bases, clave de certificados, llaves de Garage, SMTP | `docker compose` (interpolación) |
+| `/etc/faclab/secrets.env` | root, 0600 | Contraseñas de las bases, clave de certificados, llaves de Garage, SMTP, llaves y frases de cifrado de los respaldos | `docker compose` (interpolación) |
 | `/etc/faclab/secrets/postgres_password` | root, 0400 | La contraseña del superusuario | El entrypoint de postgres y `stack.sh` |
 | `/etc/faclab/secrets/jwt_private_key.pem` | 10001, 0400 | La llave Ed25519 que firma los tokens | core (`JWT_PRIVATE_KEY_FILE`) |
 | `/etc/faclab/secrets/secret_encryption_keys` | 10001, 0400 | Las llaves Fernet de los secretos de webhooks | core (`SECRET_ENCRYPTION_KEYS_FILE`) |
@@ -207,7 +222,9 @@ Completa los valores `<...>` y los dominios:
 - un `KAFKA_CLUSTER_ID` nuevo;
 - el receptor de SigNoz (S8.6);
 - el SMTP (D-3): proveedor, remitentes, y SPF, DKIM y DMARC del dominio;
-- el RUC del proveedor del sistema.
+- el RUC del proveedor del sistema;
+- el almacenamiento externo de los respaldos: endpoint, región y los dos buckets
+  ([RESPALDOS.md](RESPALDOS.md#preparar-el-almacenamiento-externo)).
 
 Nada de esto es secreto. Cada variable que lee `compose.yaml` aparece allí con su valor por defecto.
 
@@ -224,12 +241,14 @@ Es el mismo despliegue que cualquier otro ([Despliegue continuo](#despliegue-con
 vez no hay versión anterior: si algo falla, lo dice y no revierte nada.
 
 1. **Checkout de faclab-infra** en el tag de `INFRA_VERSION`.
-2. **Imágenes:** las cuatro propias desde GHCR, fijadas por digest, y las de terceros.
+2. **Imágenes:** las cinco propias desde GHCR (con el Caddy y el PostgreSQL de faclab-infra), fijadas
+   por digest, y las de terceros.
 3. **`migrate`:**
    1. PostgreSQL;
    2. el rol y la base de invoicing (`init-invoicing-db.sh`);
    3. los roles y la base del core (`db_roles`, con el superusuario solo en esa corrida);
-   4. las migraciones del core (como `faclab_owner`) y las de invoicing.
+   4. las migraciones del core (como `faclab_owner`) y las de invoicing;
+   5. con `BACKUPS=on`, el stanza de pgBackRest en el repositorio externo.
 4. **Servicios en orden,** cada grupo sano antes del siguiente:
    - infra: PostgreSQL, Kafka y sus tópicos, Garage, el Collector y Caddy;
    - invoicing;
@@ -239,6 +258,7 @@ vez no hay versión anterior: si algo falla, lo dice y no revierte nada.
    - Caddy enruta los dos dominios;
    - cada contenedor corre su versión;
    - 20 segundos después, nada se reinició.
+6. **Respaldos:** con `BACKUPS=on`, los timers y, si el repositorio está vacío, el primer completo.
 
 Sobre un servidor ya aprovisionado, el primer despliegue en la VM de staging tardó 3 minutos,
 descargas incluidas. La instalación de S8.1, que construía las imágenes en el servidor, tardaba 8.
@@ -298,6 +318,8 @@ sudo deploy/production/scripts/stack.sh compose ps          # cualquier comando 
   `stack.sh compose up -d --force-recreate core-api core-worker`.
 - **La configuración de Caddy** se recarga sin cortar: `stack.sh compose exec caddy caddy reload
   --config /etc/caddy/Caddyfile`.
+- **Respaldos:** `sudo deploy/production/scripts/backups.sh status`, y la guía en
+  [RESPALDOS.md](RESPALDOS.md).
 - **Kafka y PostgreSQL** no se exponen. Para mirarlos:
   - `stack.sh compose exec kafka kafka-topics --bootstrap-server localhost:9092 --list`;
   - `stack.sh compose exec postgres psql -U postgres`.
@@ -314,7 +336,7 @@ para amd64 y arm64:
 | faclab-core | `ghcr.io/faclab-ec/faclab-api` |
 | faclab-invoicing | `ghcr.io/faclab-ec/faclab-invoicing` |
 | faclab-web | `ghcr.io/faclab-ec/faclab-web` |
-| faclab-infra | `ghcr.io/faclab-ec/faclab-caddy`, el Caddy de entrada; además, el stack de su tag |
+| faclab-infra | `ghcr.io/faclab-ec/faclab-caddy`, el Caddy de entrada, y `ghcr.io/faclab-ec/faclab-postgres`, PostgreSQL con pgBackRest (S8.3); además, el stack de su tag |
 
 La imagen lleva la versión en `SERVICE_VERSION` (el `service.version` de logs y trazas) y en la
 etiqueta `org.opencontainers.image.version`. Los paquetes son públicos, así que el servidor descarga
@@ -337,7 +359,7 @@ secretos.
 
 - valida el formato;
 - comprueba la matriz (`compat.py`);
-- comprueba que las cuatro imágenes estén publicadas.
+- comprueba que las cuatro imágenes de las versiones estén publicadas.
 
 Después llama por SSH a `remote.sh`, que corre `stack.sh deploy` con esas versiones. Con un `flock`,
 un despliegue a la vez:
@@ -359,7 +381,8 @@ un despliegue a la vez:
    - 20 segundos sin reinicios ni contenedores `unhealthy` (`DEPLOY_SOAK_SECONDS`).
 8. **Resultado:**
    - **si todo pasa,** `current.env` pasa a `previous.env`, el destino a `current.env`, queda una línea
-     en `history.log` y se borran las imágenes que no son ni la actual ni la anterior;
+     en `history.log`, se borran las imágenes que no son ni la actual ni la anterior y, con
+     `BACKUPS=on`, se instalan los timers de los respaldos;
    - **si algo falla desde el paso 4,** [reversión automática](#reversión).
 
 Cada paso muestra su hora. Códigos de salida de `deploy.sh`, `remote.sh` y `stack.sh deploy`:
@@ -522,6 +545,8 @@ Cada rotación sigue la misma forma:
 | `OBJECT_STORAGE_ACCESS_KEY_ID`, `OBJECT_STORAGE_SECRET_ACCESS_KEY` | `garage-key-id`, `garage-secret` | Garage solo crea la llave de las variables en el primer arranque. Rota con su CLI: crea e importa la nueva con permiso en el bucket, instala los secretos, `stack.sh up`, y borra la anterior. Ver abajo |
 | `GARAGE_RPC_SECRET`, `GARAGE_ADMIN_TOKEN` | `garage-secret`, `base64` | `stack.sh up` (reinicia Garage) |
 | `SMTP_USER`, `SMTP_PASSWORD` | las del proveedor | `stack.sh up` |
+| `BACKUP_PG_ACCESS_KEY_ID`, `BACKUP_PG_SECRET_ACCESS_KEY`, `BACKUP_OBJECTS_ACCESS_KEY_ID`, `BACKUP_OBJECTS_SECRET_ACCESS_KEY` | las del proveedor | `stack.sh up` (recrea `postgres`; la copia de objetos las lee en su próxima corrida). Borra la llave anterior en el proveedor después |
+| `BACKUP_PG_CIPHER_PASS`, `BACKUP_OBJECTS_CRYPT_PASSWORD`, `BACKUP_OBJECTS_CRYPT_SALT` | `base64`, `hex`, `hex` | **No se rotan en el lugar**: cifran lo que ya está en los buckets. Cambiarlas exige un repositorio nuevo (otro bucket o ruta) con un completo y una copia nuevos, y conservar las anteriores mientras vivan los respaldos viejos ([RESPALDOS.md](RESPALDOS.md)) |
 
 **Llave JWT.** Los tokens de refresco viven 7 días; la llave anterior se acepta durante ese tiempo.
 
@@ -599,7 +624,11 @@ Diferencias con un VPS real:
     falla con «No route to host».
   - Los contenedores del Docker de la Mac llegan a la IP sin ese permiso: de ahí corren `nmap` y
     `smoke.sh` en la prueba.
-- **No hay SigNoz:** el Collector reintenta y descarta lo que no cabe en su cola (S8.6).
+- **No hay SigNoz propio:** el Collector envía al de faclab-infra en la Mac (`host.orb.internal:4317`),
+  que reenvía al SigNoz local cuando está arriba; si no, reintenta y descarta lo que no cabe en su cola
+  (S8.6).
+- **Los respaldos van al sustituto de S3** de `drill/` en la Mac, no a un proveedor
+  ([RESPALDOS.md](RESPALDOS.md#el-sustituto-de-staging)).
 - **El workflow `Deploy` no llega a la VM,** porque no tiene IP pública: en S8.2 se desplegó desde la
   Mac con `deploy.sh` y la misma llave restringida del CI. La primera corrida del workflow queda para
   el primer VPS.
@@ -615,7 +644,8 @@ del core registra la prueba: qué se corrió, sus resultados y la memoria medida
   - el proveedor de correo, con SPF, DKIM y DMARC (D-3).
 - **El sandbox desplegado** (`sandbox.<dominio>`) y el workflow programado de los ejemplos de la API
   contra él: necesitan un servidor público.
-- **S8.3:** respaldos de PostgreSQL (PITR) y del almacenamiento de objetos fuera del servidor. El
-  respaldo previo a cada despliegue solo sirve para volver atrás de ese despliegue.
+- **El proveedor real de los respaldos** (S8.3): staging usa el sustituto de `drill/`. Con el primer
+  VPS se crean sus buckets, con Object Lock de 7 años para los comprobantes, y se repite el simulacro
+  ([RESPALDOS.md](RESPALDOS.md)).
 - **S8.6:** SigNoz de producción, OTLP con TLS y la telemetría propia del Collector.
 - **Kafka con TLS y SASL**, si alguna vez sale del servidor (G-49), e IPv6.
