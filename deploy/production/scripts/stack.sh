@@ -17,7 +17,7 @@
 #   stack.sh rollback                       deploy the previous versions (deployments)
 #   stack.sh deployments                    what runs, what ran before, and the history
 #   stack.sh backups                        the backups taken before each deployment
-#   stack.sh restore-predeploy <id> --yes   replace both databases with that backup and start the
+#   stack.sh restore-predeploy <id> --yes   replace both databases with that backup and deploy the
 #                                           versions that ran then (what was written since is lost)
 #   stack.sh authorize-ci "<public key>"    let that SSH key run only remote.sh (the CI's key)
 #   stack.sh migrate                        roles, databases and migrations of the deployed versions
@@ -519,6 +519,11 @@ deploy() {
   fi
 
   printf '\nstack.sh: the deployment of %s failed\n' "$(versions_of "$target")" >&2
+  if [ "${FACLAB_DEPLOY_KIND:-}" = restore ]; then
+    # The databases are the backup's: the versions that ran before it wouldn't fit them
+    record failed "restore of $(versions_of "$target") (backup $id)"
+    die "the restored databases are in place, but their versions didn't start: check stack.sh status and the log, and deploy them again"
+  fi
   if [ ! -f "$current" ]; then
     record failed "$(versions_of "$target") (backup $id, nothing to roll back to)"
     die "there is no previous deployment to go back to. The databases before it are in backup $id"
@@ -611,39 +616,40 @@ list_backups() {
   done
 }
 
+# The databases of a backup and the versions that ran when it was taken: the applications stop, both
+# databases are created again from the dumps, and those versions are deployed over them (a new
+# backup first, migrations that have nothing to do, the services in order and the checks)
 restore_predeploy() {
-  local id="${1:-}" dir db versions="$STATE/current.env"
+  local id="${1:-}" dir db versions saved
   [ -n "$id" ] || die "usage: stack.sh restore-predeploy <id> --yes (stack.sh backups lists them)"
   dir="$BACKUPS/$id"
   [ -d "$dir" ] || die "there is no backup $id (stack.sh backups)"
   [ "${2:-}" = --yes ] ||
     die "it replaces both databases with backup $id: everything written since is lost. Add --yes"
   take_lock
+  versions="$STATE/current.env"
   [ -f "$dir/versions.env" ] && versions="$dir/versions.env"
-  local VERSIONS="$versions"
+  # The versions to start, kept apart: deploy rotates the backups and moves current.env
+  saved="$STATE/restore.env"
+  install -m 0600 "$versions" "$saved"
 
   step "Stopping the applications"
-  compose stop "${APP_SERVICES[@]}"
+  VERSIONS="$versions" compose stop "${APP_SERVICES[@]}"
   for db in faclab faclab_invoicing; do
     [ -f "$dir/$db.dump" ] || continue
-    step "Restoring $db"
-    compose exec -T postgres dropdb -U postgres --if-exists --force "$db"
+    step "Restoring $db from backup $id"
+    VERSIONS="$versions" compose exec -T postgres dropdb -U postgres --if-exists --force "$db"
     # -C creates it again from the dump: owner, privileges and settings included
-    compose exec -T postgres pg_restore -U postgres --exit-on-error -C -d postgres < "$dir/$db.dump"
+    VERSIONS="$versions" compose exec -T postgres pg_restore -U postgres --exit-on-error -C -d postgres < "$dir/$db.dump"
   done
+  record restored "databases of backup $id"
 
   if [ ! -f "$dir/versions.env" ]; then
-    record restored "backup $id (applications stopped)"
     die "databases restored; backup $id has no versions (taken before the first deployment by stack.sh): the applications stay stopped until you deploy the versions that ran then"
   fi
-  bring_up "$versions"
-  final_checks "$versions"
-  if ! cmp -s "$versions" "$STATE/current.env"; then
-    [ -f "$STATE/current.env" ] && mv "$STATE/current.env" "$STATE/previous.env"
-    install -m 0600 "$versions" "$STATE/current.env"
-  fi
-  record restored "backup $id, $(versions_of "$versions")"
-  printf '\nRestored backup %s: %s runs\n' "$id" "$(versions_of "$versions")"
+  export FACLAB_DEPLOY_KIND=restore
+  deploy "$(file_value "$saved" INFRA_VERSION)" "$(file_value "$saved" CORE_VERSION)" \
+    "$(file_value "$saved" INVOICING_VERSION)" "$(file_value "$saved" WEB_VERSION)"
 }
 
 authorize_ci() {
