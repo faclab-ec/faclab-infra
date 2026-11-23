@@ -44,8 +44,10 @@ faclab-infra/
 ├── docker-compose.yml          # Definicion de servicios
 ├── .env.example                # Variables de entorno (plantilla)
 ├── .env                        # Variables de entorno (no versionado)
+├── CHANGELOG.md                # Lo que trae cada versión (S8.2)
 ├── deploy/
-│   └── production/             # Stack de producción en un VPS (S8.1): compose, Caddy, secretos, guía
+│   └── production/             # Stack de producción en un VPS (S8.1): compose, Caddy, secretos, guía;
+│                               # versiones por entorno, matriz de compatibilidad y despliegue (S8.2)
 ├── garage/
 │   └── garage.toml             # Configuracion de Garage (un nodo, sin replicacion); también la de producción
 ├── observability/
@@ -62,6 +64,7 @@ faclab-infra/
 │   ├── collector-redaction-test.py # Prueba que el Collector borra las claves sensibles (CI)
 │   ├── create-topics.sh        # Crea los tópicos de Kafka con varias particiones
 │   ├── init-invoicing-db.sh    # Crea el rol y las bases de faclab-invoicing
+│   ├── release.sh              # Prepara una versión (CHANGELOG) y la etiqueta (S8.2)
 │   ├── signoz.sh               # SigNoz local (up, down, status, config) y dashboards y alertas (check, sync, verify)
 │   └── signoz-sync.py          # Sincroniza canales, dashboards y alertas con la API de SigNoz
 ```
@@ -469,8 +472,39 @@ core):
 Solo Caddy publica puertos (80 y 443). Los secretos viven cifrados con sops y age fuera de este
 repositorio.
 
-La guía completa, desde un servidor limpio hasta una venta facturada, está en
-[deploy/production/README.md](deploy/production/README.md).
+Desde S8.2 las imágenes salen de GitHub Container Registry, publicadas por el tag de cada
+repositorio:
+
+- `deploy/production/versions/<entorno>.env` dice qué versión de cada uno corre en cada entorno, y
+  cambiarla es un PR;
+- `deploy/production/scripts/deploy.sh`, desde tu máquina o desde el workflow `Deploy`, la despliega:
+  respaldo, migraciones, servicios en orden y verificación de salud;
+- si algo falla, vuelve sola a la versión anterior;
+- la [matriz de compatibilidad](deploy/production/COMPATIBILITY.md) dice qué versiones funcionan
+  juntas.
+
+La guía completa, desde un servidor limpio hasta una venta facturada, con el despliegue y la
+reversión, está en [deploy/production/README.md](deploy/production/README.md).
+
+## Versiones y publicación
+
+faclab-infra sigue la misma convención que core, invoicing y web (S8.2):
+
+- **Versiones.** Cada una es un tag `vX.Y.Z` con [versionado semántico](https://semver.org/lang/es/),
+  0.x hasta el piloto. Lo que trae está en [CHANGELOG.md](CHANGELOG.md).
+- **Preparar.** `scripts/release.sh minor` (o `major`, `patch`, `X.Y.Z`), en `master` al día, crea la
+  rama `release/vX.Y.Z` con la sección del CHANGELOG escrita desde los commits convencionales. Se
+  sube con un PR titulado `chore(release): vX.Y.Z`.
+- **Etiquetar.** Después del merge, `scripts/release.sh tag X.Y.Z` crea el tag; `git push origin
+  vX.Y.Z` lo publica.
+- **Publicar.** El tag corre `.github/workflows/release.yml`, que publica el Caddy de entrada
+  (`deploy/production/caddy`) como `ghcr.io/faclab-ec/faclab-caddy:X.Y.Z` para amd64 y arm64. El
+  servidor ya no lo compila.
+- **Desplegar.** La versión de faclab-infra que corre un entorno es `INFRA_VERSION` de su archivo de
+  versiones. El servidor hace checkout de ese tag y usa su `compose.yaml` y sus scripts.
+
+Una **prerelease** (`vX.Y.Z-rc.1`) se publica desde cualquier commit subido y sirve para staging;
+producción solo acepta versiones finales.
 
 ## Variables de entorno
 
@@ -485,8 +519,10 @@ Cada PR y cada push a `master` corren `.github/workflows/ci.yml` en GitHub Actio
 - revisa los scripts con ShellCheck;
 - forja `observability/signoz/casting.yaml` con el `foundryctl` fijado y valida el compose generado (`scripts/signoz.sh config`);
 - valida los dashboards, las alertas y los runbooks sin red (`scripts/signoz-sync.py check`);
+- revisa los workflows con `actionlint` (los de release y despliegue solo corren con un tag o a mano);
 - valida el stack de producción (`deploy/production/scripts/ci-validate.sh`):
-  - el compose con cada archivo de entorno;
+  - el compose con cada archivo de entorno y sus versiones, con las imágenes publicadas de cada una;
+  - las dos combinaciones de versiones contra la matriz de compatibilidad (`compat.py`);
   - la imagen de Caddy y su `Caddyfile` en los dos modos de TLS;
   - el Collector con su overlay;
   - que ningún archivo de secretos esté versionado.
@@ -499,6 +535,7 @@ docker compose --env-file .env.example run --rm --no-deps collector validate --c
 shellcheck scripts/*.sh deploy/production/scripts/*.sh   # o: docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable ...
 scripts/signoz.sh config
 python3 scripts/signoz-sync.py check
+docker run --rm -v "$PWD:/repo:ro" --workdir /repo rhysd/actionlint:1.7.12
 deploy/production/scripts/ci-validate.sh
 ```
 

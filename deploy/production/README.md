@@ -2,7 +2,8 @@
 
 El stack de producción de Faclab en un VPS con Docker Compose (S8.1, ADR-0011 del core). Esta guía
 lleva un servidor Ubuntu 24.04 limpio hasta el sistema funcionando, con TLS y una venta facturada en
-el SRI.
+el SRI. Desde S8.2 cubre también el despliegue continuo de versiones publicadas en GitHub Container
+Registry y su reversión.
 
 ## Qué se despliega
 
@@ -37,14 +38,18 @@ Archivos de esta carpeta:
 | Archivo | Qué es |
 |---|---|
 | `compose.yaml` | El stack. Usa además `scripts/create-topics.sh`, `scripts/init-invoicing-db.sh`, `garage/garage.toml` y `observability/otel-collector/config.yaml` de la raíz del repositorio |
-| `compose.build.yml` | Construye core, invoicing y web desde sus repositorios públicos en una ref fija, mientras S8.2 no las publique en GHCR |
-| `caddy/` | La imagen de Caddy, el `Caddyfile` y los dos modos de TLS |
+| `versions/staging.env`, `versions/production.env` | La versión de faclab-infra, core, invoicing y web que corre cada entorno (S8.2). Cambiarla es un PR |
+| `COMPATIBILITY.md` | La matriz de compatibilidad: qué publica, acepta y requiere cada versión |
+| `caddy/` | La imagen de Caddy (la publica el release de faclab-infra), el `Caddyfile` y los dos modos de TLS |
 | `otel-collector.yaml` | Lo que cambia del Collector en producción (una sola instancia de PostgreSQL, `health_check`) |
 | `env/staging.env`, `env/production.env.example` | La configuración de cada entorno que no es secreta |
 | `secrets.env.example`, `sops.yaml.example` | Los nombres de los secretos y el formato de `.sops.yaml`, sin valores |
 | `scripts/provision-vps.sh` | Prepara el servidor |
 | `scripts/secrets.sh` | Genera, edita y envía los secretos (en tu máquina) |
-| `scripts/stack.sh` | Instala, migra, levanta y revisa el stack (en el servidor) |
+| `scripts/deploy.sh` | Despliega un entorno o lo revierte (en tu máquina o en el workflow `Deploy`) |
+| `scripts/remote.sh` | La entrada del servidor para `deploy.sh`: el comando forzado de la llave del CI |
+| `scripts/stack.sh` | Despliega, revierte, migra, levanta y revisa el stack (en el servidor) |
+| `scripts/compat.py` | Comprueba una combinación de versiones contra la matriz |
 | `scripts/smoke.sh` | Prueba de humo desde fuera |
 | `scripts/ci-validate.sh` | Lo que valida el CI, sin servidor |
 
@@ -60,8 +65,9 @@ Archivos de esta carpeta:
   `faclab_invoicing` en `faclab_invoicing`.
 - **Kafka sin TLS ni SASL, solo en la red interna** `data`: sin puertos publicados ni kafka-ui. Basta
   mientras Kafka no salga del servidor (G-49).
-- **Imágenes construidas en el servidor** desde Git en una ref fija (`*_REF`, mejor un SHA o una
-  etiqueta) hasta que S8.2 las publique.
+- **Imágenes publicadas** (S8.2): cada repositorio publica la suya en GitHub Container Registry al
+  etiquetar una versión, para amd64 y arm64. El servidor las descarga y las fija por digest; no
+  construye nada.
 
 ## Requisitos
 
@@ -98,11 +104,14 @@ Lo que hace:
 Comprueba, desde otra terminal y antes de cerrar la sesión de root, que entras como `deploy` y que
 root ya no entra.
 
-> **Docker Hub.** Sin cuenta, Docker Hub da 10 descargas por hora a cada IP, y la primera instalación
-> necesita una docena de imágenes: en staging se agotó el límite a mitad de `stack.sh install`. El
-> espejo de Google resuelve la mayoría, y lo que no tiene sale de Docker Hub. Si aun así se agota,
-> espera una hora y repite `stack.sh install` (sigue donde quedó), o entra con una cuenta de Docker
-> Hub en el servidor (`sudo docker login`, 100 descargas por hora).
+> **Docker Hub.** Sin cuenta, Docker Hub da 10 descargas por hora a cada IP. En S8.1 la primera
+> instalación necesitaba una docena de imágenes, y en staging agotó el límite a la mitad. El espejo de
+> Google resuelve la mayoría, y lo que no tiene sale de Docker Hub. Desde S8.2 las imágenes propias
+> vienen de GHCR, sin ese límite; las de terceros (PostgreSQL, Kafka, Garage, el Collector) siguen
+> pasando por Docker Hub.
+>
+> Si aun así se agota, espera una hora y repite el despliegue (sigue donde quedó), o entra con una
+> cuenta de Docker Hub en el servidor (`sudo docker login`, 100 descargas por hora).
 
 > **Docker y ufw.** Docker escribe sus propias reglas de iptables para los puertos publicados, antes
 > que las de ufw: ufw no los filtra. Lo que mantiene cerrado lo demás es que solo `caddy` publica
@@ -195,7 +204,6 @@ cp deploy/production/env/production.env.example deploy/production/env/production
 
 Completa los valores `<...>` y los dominios:
 
-- las refs de las imágenes;
 - un `KAFKA_CLUSTER_ID` nuevo;
 - el receptor de SigNoz (S8.6);
 - el SMTP (D-3): proveedor, remitentes, y SPF, DKIM y DMARC del dominio;
@@ -205,23 +213,35 @@ Nada de esto es secreto. Cada variable que lee `compose.yaml` aparece allí con 
 
 ## 5. Primera instalación
 
+Las versiones que corre cada entorno están en `versions/<entorno>.env`, versionado en este
+repositorio. Desde tu máquina, con tu llave:
+
 ```bash
-sudo deploy/production/scripts/stack.sh install
+FACLAB_SSH="ssh deploy@<servidor>" deploy/production/scripts/deploy.sh production
 ```
 
-1. **`build`:** las imágenes, una por vez. Construir la web y el core juntos no cabe en 8 GB.
-2. **`migrate`:**
+Es el mismo despliegue que cualquier otro ([Despliegue continuo](#despliegue-continuo)). La primera
+vez no hay versión anterior: si algo falla, lo dice y no revierte nada.
+
+1. **Checkout de faclab-infra** en el tag de `INFRA_VERSION`.
+2. **Imágenes:** las cuatro propias desde GHCR, fijadas por digest, y las de terceros.
+3. **`migrate`:**
    1. PostgreSQL;
    2. el rol y la base de invoicing (`init-invoicing-db.sh`);
    3. los roles y la base del core (`db_roles`, con el superusuario solo en esa corrida);
    4. las migraciones del core (como `faclab_owner`) y las de invoicing.
-3. **`up`:** el resto. Espera a que cada servicio esté sano; `kafka-topics` crea los tópicos antes de
-   los workers.
-4. **`status`:** los contenedores y el `health_check` del Collector.
+4. **Servicios en orden,** cada grupo sano antes del siguiente:
+   - infra: PostgreSQL, Kafka y sus tópicos, Garage, el Collector y Caddy;
+   - invoicing;
+   - core;
+   - web.
+5. **Comprobaciones:**
+   - Caddy enruta los dos dominios;
+   - cada contenedor corre su versión;
+   - 20 segundos después, nada se reinició.
 
-En la VM de staging (arm64, 6 GB), la instalación completa desde un servidor recién aprovisionado
-tardó 8 minutos, casi todo en construir las imágenes. En un VPS de 4 vCPU espera algo parecido o algo
-más.
+Sobre un servidor ya aprovisionado, el primer despliegue en la VM de staging tardó 3 minutos,
+descargas incluidas. La instalación de S8.1, que construía las imágenes en el servidor, tardaba 8.
 
 ## 6. Prueba de humo
 
@@ -269,14 +289,9 @@ sudo deploy/production/scripts/stack.sh logs core-worker    # sigue los logs
 sudo deploy/production/scripts/stack.sh compose ps          # cualquier comando de compose
 ```
 
-- **Una versión nueva:**
-  1. cambia `*_REF` en `env/<entorno>.env` (con el `git pull` de este repositorio si hace falta);
-  2. `stack.sh build`;
-  3. `stack.sh migrate`;
-  4. `stack.sh up`.
-
-  Cada servicio se reinicia: hay un corte breve (ADR-0011). Volver atrás es lo mismo con la ref
-  anterior, mientras sus migraciones lo permitan; el procedimiento completo es de S8.2.
+- **Una versión nueva o volver a la anterior:** [Despliegue continuo](#despliegue-continuo) y
+  [Reversión](#reversión).
+- **Qué corre y qué corrió:** `stack.sh deployments` (también `deploy.sh <entorno> deployments`).
 - **Un cambio de configuración** (`env/` o `secrets.env`): `stack.sh up` recrea los servicios cuya
   configuración cambió.
 - **Un archivo de `/etc/faclab/secrets` cambiado:** Compose no lo detecta. Recrea a quien lo monta:
@@ -286,6 +301,205 @@ sudo deploy/production/scripts/stack.sh compose ps          # cualquier comando 
 - **Kafka y PostgreSQL** no se exponen. Para mirarlos:
   - `stack.sh compose exec kafka kafka-topics --bootstrap-server localhost:9092 --list`;
   - `stack.sh compose exec postgres psql -U postgres`.
+
+## Despliegue continuo
+
+Desde S8.2 una versión es un tag `vX.Y.Z` de cada repositorio (CHANGELOG en cada uno).
+
+**Qué produce cada tag.** Su workflow `release.yml` publica la imagen en GitHub Container Registry,
+para amd64 y arm64:
+
+| Repositorio | Imagen |
+|---|---|
+| faclab-core | `ghcr.io/faclab-ec/faclab-api` |
+| faclab-invoicing | `ghcr.io/faclab-ec/faclab-invoicing` |
+| faclab-web | `ghcr.io/faclab-ec/faclab-web` |
+| faclab-infra | `ghcr.io/faclab-ec/faclab-caddy`, el Caddy de entrada; además, el stack de su tag |
+
+La imagen lleva la versión en `SERVICE_VERSION` (el `service.version` de logs y trazas) y en la
+etiqueta `org.opencontainers.image.version`. Los paquetes son públicos, así que el servidor descarga
+sin credenciales; los repositorios también lo son, y S8.1 comprobó que las imágenes no llevan
+secretos.
+
+**Qué corre cada entorno.** `versions/staging.env` y `versions/production.env` lo dicen.
+
+1. **Cambiar una versión es un PR.** El CI de este repositorio lo rechaza si la combinación no está en
+   la [matriz de compatibilidad](COMPATIBILITY.md). Al publicar una versión, su fila se agrega en ese
+   mismo PR.
+2. **Después del merge, se despliega:**
+   - desde el workflow `Deploy` de este repositorio (Actions → Deploy → Run workflow, entorno y
+     `deploy`);
+   - o desde tu máquina, con `FACLAB_SSH="ssh deploy@<servidor>" deploy/production/scripts/deploy.sh <entorno>`.
+
+   Producción solo acepta versiones finales; staging, también prereleases (`0.2.0-rc.1`).
+
+**Lo que hace `deploy.sh`.** Antes de tocar el servidor:
+
+- valida el formato;
+- comprueba la matriz (`compat.py`);
+- comprueba que las cuatro imágenes estén publicadas.
+
+Después llama por SSH a `remote.sh`, que corre `stack.sh deploy` con esas versiones. Con un `flock`,
+un despliegue a la vez:
+
+1. **Checkout** de faclab-infra en `v<INFRA_VERSION>`, y continúa el `stack.sh` de esa versión.
+2. **Imágenes:** las descarga y las fija por digest en `/etc/faclab/deployments/target.env`. Si una
+   falla, nada cambió.
+3. **Respaldo:** `pg_dump` de las dos bases en `/var/backups/faclab/predeploy/<id>/` (root, 0600),
+   con las versiones que corrían. Se conservan los últimos 5. No reemplaza los respaldos de S8.3.
+4. **Esquema hacia atrás**, si la versión de destino es más vieja que la base: `alembic downgrade` y
+   `node-pg-migrate down`, con las imágenes que conocen esas migraciones.
+5. **Migraciones** (`migrate`).
+6. **Servicios en orden:** infra → invoicing → core → web. Cada grupo con `up --wait` y su salud
+   desde la red interna (Collector `:13133`, invoicing `/health`, core `/health/ready`, web
+   `/health`).
+7. **Comprobaciones:**
+   - el JWKS y `config.js` a través de Caddy;
+   - la etiqueta de versión de cada contenedor;
+   - 20 segundos sin reinicios ni contenedores `unhealthy` (`DEPLOY_SOAK_SECONDS`).
+8. **Resultado:**
+   - **si todo pasa,** `current.env` pasa a `previous.env`, el destino a `current.env`, queda una línea
+     en `history.log` y se borran las imágenes que no son ni la actual ni la anterior;
+   - **si algo falla desde el paso 4,** [reversión automática](#reversión).
+
+Cada paso muestra su hora. Códigos de salida de `deploy.sh`, `remote.sh` y `stack.sh deploy`:
+
+| Código | Qué significa |
+|---|---|
+| 0 | Desplegado |
+| 3 | Falló y se revirtió solo: corren las versiones de antes |
+| Otro | Falló sin revertir (sin versión anterior, o la reversión también falló): lee el log |
+
+Cada servicio que cambia se reinicia, con un corte breve (ADR-0011). Entre las migraciones y la
+actualización de core, la versión anterior corre unos segundos sobre el esquema nuevo: por eso las
+migraciones deben ser aditivas ([abajo](#migraciones)).
+
+### El workflow `Deploy` y la llave del CI
+
+El workflow (`.github/workflows/deploy.yml`) corre `deploy.sh` desde `master`, a mano, por entorno, y
+espera a que termine el despliegue anterior de ese entorno. Su llave solo puede correr `remote.sh`.
+
+**1. Una llave por entorno,** sin contraseña y fuera de este repositorio:
+
+```bash
+ssh-keygen -t ed25519 -N '' -C faclab-ci-production -f ~/.config/faclab/ci-production-ed25519
+```
+
+**2. Autorizarla en el servidor.** `stack.sh authorize-ci` la escribe en `authorized_keys` de `deploy`
+con `restrict,command="…/remote.sh"`: sin shell, sin reenvíos, y solo `deploy <cuatro versiones>`,
+`rollback`, `status` y `deployments`. Cada versión se valida contra un patrón estricto y nunca pasa
+por un shell. Una llave nueva reemplaza a la anterior.
+
+```bash
+sudo deploy/production/scripts/stack.sh authorize-ci "$(cat ci-production-ed25519.pub)"
+```
+
+**3. El entorno de GitHub.** En faclab-infra, Settings → Environments, crea `staging` y `production`:
+
+- **Secreto** `DEPLOY_SSH_KEY`: la llave privada.
+- **Variables:**
+  - `DEPLOY_HOST`: la IP o el nombre del servidor;
+  - `DEPLOY_KNOWN_HOSTS`: la línea de `ssh-keyscan -t ed25519 <host>`, comparada con
+    `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` en el servidor;
+  - opcionales, `DEPLOY_PORT` y `DEPLOY_USER`.
+- **En `production`:**
+  - *Required reviewers* (tú), para que cada despliegue espere tu aprobación;
+  - *Deployment branches*, solo `master`.
+
+El workflow nunca desactiva la verificación de la llave del servidor (`StrictHostKeyChecking=yes`).
+
+**Rotar la llave del CI:** genera otra, `authorize-ci` con la nueva (reemplaza la anterior) y cambia
+`DEPLOY_SSH_KEY`.
+
+## Reversión
+
+### Automática
+
+Si el despliegue falla en las migraciones, en un servicio, en su salud o en las comprobaciones,
+`stack.sh`:
+
+1. **Esquema:** lo baja a la revisión que conoce la versión anterior, con las imágenes nuevas (las
+   únicas que tienen esas migraciones).
+2. **faclab-infra:** si cambió, vuelve a su tag anterior y usa el `stack.sh` de esa versión.
+3. **Servicios:** levanta la versión anterior por digest, en el mismo orden y con las mismas
+   comprobaciones.
+4. **Salida:** registra `rolled-back` en el historial y sale con 3.
+
+Lo que la versión fallida escribió en las tablas o columnas que su migración agregó se pierde con la
+bajada; lo demás queda.
+
+Si la bajada del esquema falla, se detiene sin restaurar nada solo. Algunas versiones nuevas pueden
+quedar corriendo. Te indica el respaldo previo: `stack.sh restore-predeploy <id> --yes`.
+
+### A mano: un comando
+
+```bash
+deploy/production/scripts/deploy.sh <entorno> rollback       # desde tu máquina, o el workflow con action=rollback
+sudo deploy/production/scripts/stack.sh rollback             # en el servidor
+```
+
+Despliega las versiones de `previous.env`, con respaldo, esquema hacia atrás, orden y comprobaciones.
+Queda en el historial como `rollback`. Un segundo `rollback` vuelve a la versión de la que se salió.
+
+Después, abre un PR que deje `versions/<entorno>.env` como lo que corre, o una versión corregida: el
+archivo es lo que se desplegará la próxima vez.
+
+### Restaurar el respaldo previo
+
+```bash
+sudo deploy/production/scripts/stack.sh backups                      # id, tamaño y versiones de cada uno
+sudo deploy/production/scripts/stack.sh restore-predeploy <id> --yes
+```
+
+1. detiene las aplicaciones;
+2. recrea las dos bases desde el respaldo (`pg_restore -C`: dueño, privilegios y configuración);
+3. despliega las versiones que corrían al tomarlo.
+
+Se pierde todo lo escrito desde ese respaldo. Es el camino para una migración que no se puede
+revertir.
+
+### Migraciones
+
+**La regla para las nuevas: aditivas (expand/contract).** La migración de una versión deja funcionando
+a la anterior sobre el esquema nuevo: agrega tablas, columnas nulables o con valor por defecto e
+índices. Lo que quita, renombra o vuelve obligatorio va en una versión posterior, cuando ninguna
+versión desplegada lo use. Así:
+
+- el corte entre las migraciones y la actualización de core no rompe nada;
+- la reversión casi nunca encuentra datos que no le caben.
+
+**Tres clases de migración, según su vuelta atrás.** Dilo en la línea **Migraciones** del CHANGELOG de
+la versión:
+
+| Clase | Qué pasa al revertir | Ejemplos del core (anteriores a 0.1.0) | Cómo se vuelve atrás |
+|---|---|---|---|
+| Reversible | El `downgrade` deshace todo; pierde solo lo que la versión escribió en lo que agregó | Las que crean tablas: `924daed89837` (listas de precios), `e633ee39eaea` (cotizaciones), `e5b8c1d4a7f2` (webhooks) | La reversión, automática o a mano |
+| Falla con ciertos datos | El `downgrade` se niega mientras haya datos que no caben | `734b22d691ca` (montos que no caben en 12,6), `db772159cc6b` (cantidades con decimales), `f6c2d84e1a97` (líneas en otra presentación) | Corrige o borra esos datos y repite el `rollback`, o `restore-predeploy` |
+| Pierde información | El `downgrade` corre, pero no deja lo de antes | `e3b7a91c5d20` (pierde las presentaciones que no son la base), `b5e2c8d41f07` (los pagos `CREDIT` pasan a `OTHER`), `a3d9e1c47b52` (`CREDITED` vuelve a `AUTHORIZED`), `9d3f6a2c8e14` (las órdenes vuelven a IVA 0) | Prefiere una versión correctiva; si no, `restore-predeploy` |
+
+- **Una migración sin `downgrade`** (o que lanza un error) es no reversible: la reversión se detiene
+  en ella y queda `restore-predeploy`.
+- **En faclab-invoicing,** cada migración tiene su `-- Down Migration`.
+- **Mensajes de Kafka:** lo que una versión ya publicó se queda en los tópicos. La vuelta atrás vale
+  si los consumidores siguen aceptando esa versión del contrato ([matriz](COMPATIBILITY.md); en el
+  core, `contracts/CHANGELOG.md`). Un mensaje que un consumidor ya no acepta queda en su
+  `dead_letters`, para reprocesarlo después.
+
+### De S8.1 a S8.2
+
+Un servidor instalado con S8.1 construía las imágenes desde Git (`IMAGES_FROM=git`,
+`compose.build.yml`). Para pasarlo a S8.2:
+
+1. **El checkout:**
+   - `git remote set-url origin https://github.com/faclab-ec/faclab-infra.git` si no apunta a
+     GitHub (la VM de staging lo tenía en un `git bundle`);
+   - quita de `env/production.env` las líneas `IMAGES_FROM`, `*_REF` y `*_IMAGE`.
+2. **La llave del CI,** si vas a usar el workflow: `stack.sh authorize-ci`.
+3. **El primer despliegue,** con `deploy.sh <entorno>`:
+   - reemplaza las imágenes construidas por las publicadas, y luego las borra;
+   - no tiene versión anterior a la que volver, pero hace el respaldo previo como cualquier otro.
+
+En staging tardó 3 minutos y la prueba de humo pasó completa.
 
 ## Rotación de secretos
 
@@ -386,18 +600,22 @@ Diferencias con un VPS real:
   - Los contenedores del Docker de la Mac llegan a la IP sin ese permiso: de ahí corren `nmap` y
     `smoke.sh` en la prueba.
 - **No hay SigNoz:** el Collector reintenta y descarta lo que no cabe en su cola (S8.6).
-- **El repositorio llegó por `git bundle`**, porque la rama aún no estaba en GitHub; en un servidor
-  real es el `git clone` de arriba.
+- **El workflow `Deploy` no llega a la VM,** porque no tiene IP pública: en S8.2 se desplegó desde la
+  Mac con `deploy.sh` y la misma llave restringida del CI. La primera corrida del workflow queda para
+  el primer VPS.
 
 La [ficha de S8.1](https://github.com/faclab-ec/faclab-api/blob/master/docs/architecture/sessions/S8.1-stack-de-produccion-en-vps.md)
 del core registra la prueba: qué se corrió, sus resultados y la memoria medida.
 
 ## Lo que falta
 
-- **S8.2:** imágenes publicadas en GHCR, despliegue y reversión por CI, el sandbox desplegado y los
-  ejemplos de la API contra él.
-- **S8.3:** respaldos de PostgreSQL (PITR) y del almacenamiento de objetos fuera del servidor.
+- **El primer VPS real:**
+  - certificados de Let's Encrypt y `nmap` desde Internet;
+  - la primera corrida del workflow `Deploy` y los entornos de GitHub;
+  - el proveedor de correo, con SPF, DKIM y DMARC (D-3).
+- **El sandbox desplegado** (`sandbox.<dominio>`) y el workflow programado de los ejemplos de la API
+  contra él: necesitan un servidor público.
+- **S8.3:** respaldos de PostgreSQL (PITR) y del almacenamiento de objetos fuera del servidor. El
+  respaldo previo a cada despliegue solo sirve para volver atrás de ese despliegue.
 - **S8.6:** SigNoz de producción, OTLP con TLS y la telemetría propia del Collector.
-- **El primer VPS real:** certificados de Let's Encrypt, `nmap` desde Internet y la elección del
-  proveedor de correo con SPF, DKIM y DMARC (D-3).
 - **Kafka con TLS y SASL**, si alguna vez sale del servidor (G-49), e IPv6.
