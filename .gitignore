@@ -8,6 +8,9 @@ observability/signoz/pours/
 observability/signoz/casting.yaml.lock
 __pycache__/
 
+# The production environment's settings live on its server, copied from env/production.env.example
+deploy/production/env/production.env
+
 # Secrets of the production stack (deploy/production): they live encrypted outside the repository
 secrets.env
 *.sops.yaml
