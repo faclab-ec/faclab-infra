@@ -1,0 +1,13 @@
+# A backup job of Faclab (S8.3, deploy/production/RESPALDOS.md): backups.sh <instance>, run by the
+# timer of the same name. scripts/backups.sh install-timers puts it in /etc/systemd/system with the
+# path of the checkout (@SCRIPTS@). Its log: journalctl -u faclab-backup@<instance>
+[Unit]
+Description=Faclab backup: %i
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=@SCRIPTS@/backups.sh %i
+# A full backup of a large database takes hours; the rest, minutes
+TimeoutStartSec=8h

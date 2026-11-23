@@ -51,7 +51,8 @@ export DEBIAN_FRONTEND=noninteractive
 echo "== Packages"
 apt-get update -q
 apt-get upgrade -yq
-apt-get install -yq ca-certificates curl gnupg git openssh-server ufw unattended-upgrades
+# jq: scripts/backups.sh and stack.sh restore read pgBackRest's JSON with it (S8.3)
+apt-get install -yq ca-certificates curl gnupg git jq openssh-server ufw unattended-upgrades
 
 echo "== Deploy user: $DEPLOY_USER"
 if ! id "$DEPLOY_USER" > /dev/null 2>&1; then

@@ -8,12 +8,14 @@
 #                     Internet (ACME, SMTP, webhooks, the SRI, SigNoz)
 #   proxy   internal  caddy and what it routes to: web, core-api, invoicing-api, collector (/otlp)
 #   data    internal  postgres, kafka, object-storage, the services and the collector
+#   backup    bridge    postgres and objects-backup: they reach the storage outside the server where
+#                     the backups go (S8.3, RESPALDOS.md), and nothing else shares it
 #
 # Kafka speaks PLAINTEXT only inside `data` (G-49 mitigated by isolation: no port, no kafka-ui).
 #
-# The images of core, invoicing, web and the edge Caddy come from GHCR, published by the release
-# workflow of each repository (S8.2): *_VERSION (a tag) names them, and *_IMAGE, when set, pins them
-# by digest. stack.sh passes both from /etc/faclab/deployments/current.env (what is deployed).
+# The images of core, invoicing, web, the edge Caddy and PostgreSQL come from GHCR, published by the
+# release workflow of each repository (S8.2): *_VERSION (a tag) names them, and *_IMAGE, when set,
+# pins them by digest. stack.sh passes both from /etc/faclab/deployments/current.env (what is deployed).
 # Secrets the applications read from a file are mounted from /etc/faclab/secrets (Compose outside
 # Swarm bind-mounts them as they are: each file belongs to the uid that reads it); the rest come in
 # through interpolation and are visible to `docker inspect` on the host, never in an image.
@@ -252,10 +254,18 @@ services:
       - data
 
   # One PostgreSQL 17 with two databases: faclab (core: roles and database from core's db_roles,
-  # run by scripts/stack.sh) and faclab_invoicing (role and database from init-invoicing-db.sh)
+  # run by scripts/stack.sh) and faclab_invoicing (role and database from init-invoicing-db.sh).
+  # The official image plus pgBackRest (postgres/Dockerfile, S8.3): with BACKUPS=on every WAL segment
+  # goes, encrypted, to a bucket outside the server, at most archive_timeout seconds after it was
+  # written, and scripts/backups.sh takes the full and incremental backups (RESPALDOS.md)
   postgres:
     <<: *service
-    image: postgres:${POSTGRES_VERSION:-17.12}
+    # Published by faclab-infra's release workflow from ./postgres; CI builds it from there
+    build:
+      context: ./postgres
+      args:
+        POSTGRES_VERSION: ${POSTGRES_VERSION:-17.12}
+    image: ${POSTGRES_IMAGE:-${IMAGE_REGISTRY:-ghcr.io/faclab-ec}/faclab-postgres:${INFRA_VERSION:?}}
     command:
       - postgres
       - -c
@@ -268,15 +278,38 @@ services:
       - maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-128MB}
       - -c
       - max_connections=${POSTGRES_MAX_CONNECTIONS:-150}
+      # off on a server that only restores (a drill): it must not write into the repository of the
+      # server it comes from
+      - -c
+      - archive_mode=${BACKUPS:-on}
+      - -c
+      - archive_command=pgbackrest --stanza=faclab archive-push %p
+      # A segment leaves at most this long after a write, even with little traffic: the RPO
+      - -c
+      - archive_timeout=${POSTGRES_ARCHIVE_TIMEOUT:-60}
     environment:
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_INITDB_ARGS: --data-checksums
       INVOICING_DB_PASSWORD: ${INVOICING_DB_PASSWORD:?}
       INVOICING_DATABASES: faclab_invoicing
+      # pgBackRest (postgres/pgbackrest.conf) reads its repository from these: an S3-compatible
+      # bucket outside the server, encrypted with the passphrase of the secrets
+      PGBACKREST_REPO1_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:?}
+      PGBACKREST_REPO1_STORAGE_PORT: ${BACKUP_S3_PORT:-443}
+      PGBACKREST_REPO1_S3_REGION: ${BACKUP_S3_REGION:?}
+      PGBACKREST_REPO1_S3_URI_STYLE: ${BACKUP_S3_URI_STYLE:-path}
+      PGBACKREST_REPO1_STORAGE_VERIFY_TLS: ${BACKUP_S3_VERIFY_TLS:-y}
+      PGBACKREST_REPO1_S3_BUCKET: ${BACKUP_PG_BUCKET:?}
+      PGBACKREST_REPO1_S3_KEY: ${BACKUP_PG_ACCESS_KEY_ID:?}
+      PGBACKREST_REPO1_S3_KEY_SECRET: ${BACKUP_PG_SECRET_ACCESS_KEY:?}
+      PGBACKREST_REPO1_CIPHER_PASS: ${BACKUP_PG_CIPHER_PASS:?}
+      PGBACKREST_REPO1_RETENTION_FULL: ${BACKUP_PG_RETENTION_FULL:-4}
     secrets:
       - postgres_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - pgbackrest_spool:/var/spool/pgbackrest
+      - ./postgres/pgbackrest.conf:/etc/pgbackrest/pgbackrest.conf:ro
       - ../../scripts/init-invoicing-db.sh:/docker-entrypoint-initdb.d/init-invoicing-db.sh:ro
     shm_size: 256m
     # The entrypoint prepares its directories as root and then runs as postgres
@@ -292,6 +325,7 @@ services:
       start_period: 30s
     networks:
       - data
+      - backup
 
   # KRaft, one node, only on the internal network
   kafka:
@@ -377,6 +411,52 @@ services:
       start_period: 10s
     networks:
       - data
+
+  # The copy of the object storage (authorized XML, RIDE, logos) in a bucket outside the server with
+  # versioning and Object Lock, encrypted by rclone crypt (S8.3, RESPALDOS.md). rclone copy never
+  # deletes: an object changed in Garage becomes a new version there. A task: scripts/backups.sh runs
+  # it from its timers, and stack.sh restore-objects copies it back
+  objects-backup:
+    image: rclone/rclone:${RCLONE_VERSION:-1.76.0}
+    profiles: [tasks]
+    restart: "no"
+    logging: *logging
+    entrypoint: ["/scripts/objects-backup.sh"]
+    command: ["copy"]
+    environment:
+      HOME: /tmp
+      SOURCE_BUCKET: ${OBJECT_STORAGE_BUCKET:-faclab-invoicing}
+      ARCHIVE_BUCKET: ${BACKUP_OBJECTS_BUCKET:?}
+      ARCHIVE_VERIFY_TLS: ${BACKUP_S3_VERIFY_TLS:-y}
+      ARCHIVE_URI_STYLE: ${BACKUP_S3_URI_STYLE:-path}
+      CRYPT_PASSWORD: ${BACKUP_OBJECTS_CRYPT_PASSWORD:?}
+      CRYPT_SALT: ${BACKUP_OBJECTS_CRYPT_SALT:?}
+      RCLONE_CONFIG_GARAGE_TYPE: s3
+      RCLONE_CONFIG_GARAGE_PROVIDER: Other
+      RCLONE_CONFIG_GARAGE_ENDPOINT: http://object-storage:3900
+      RCLONE_CONFIG_GARAGE_REGION: garage
+      RCLONE_CONFIG_GARAGE_FORCE_PATH_STYLE: "true"
+      RCLONE_CONFIG_GARAGE_ACCESS_KEY_ID: ${OBJECT_STORAGE_ACCESS_KEY_ID:?}
+      RCLONE_CONFIG_GARAGE_SECRET_ACCESS_KEY: ${OBJECT_STORAGE_SECRET_ACCESS_KEY:?}
+      RCLONE_CONFIG_ARCHIVE_TYPE: s3
+      RCLONE_CONFIG_ARCHIVE_PROVIDER: Other
+      RCLONE_CONFIG_ARCHIVE_ENDPOINT: https://${BACKUP_S3_ENDPOINT:?}:${BACKUP_S3_PORT:-443}
+      RCLONE_CONFIG_ARCHIVE_REGION: ${BACKUP_S3_REGION:?}
+      RCLONE_CONFIG_ARCHIVE_ACCESS_KEY_ID: ${BACKUP_OBJECTS_ACCESS_KEY_ID:?}
+      RCLONE_CONFIG_ARCHIVE_SECRET_ACCESS_KEY: ${BACKUP_OBJECTS_SECRET_ACCESS_KEY:?}
+      # The key may write and read, never create buckets nor delete
+      RCLONE_CONFIG_ARCHIVE_NO_CHECK_BUCKET: "true"
+    volumes:
+      - ./scripts/objects-backup.sh:/scripts/objects-backup.sh:ro
+    user: "65534:65534"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop: [ALL]
+    mem_limit: 256m
+    networks:
+      - data
+      - backup
 
   # The OTel Collector (S7.4): the configuration of development plus otel-collector.yaml, which
   # keeps one PostgreSQL receiver for the shared server and adds the health_check extension. The
@@ -490,6 +570,7 @@ volumes:
   caddy_data:
   caddy_config:
   postgres_data:
+  pgbackrest_spool:
   kafka_data:
   object_storage_data:
 
@@ -501,3 +582,4 @@ networks:
     internal: true
   docker_api:
     internal: true
+  backup:
