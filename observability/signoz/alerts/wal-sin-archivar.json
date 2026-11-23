@@ -1,0 +1,92 @@
+{
+  "alert": "WAL sin archivar",
+  "alertType": "METRIC_BASED_ALERT",
+  "description": "PostgreSQL no logra archivar el WAL fuera del servidor desde hace 15 minutos (faclab.backup.wal.failing): la recuperación a un punto en el tiempo pierde lo escrito desde entonces y el WAL se acumula en el disco.",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "source": "",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "faclab.backup.wal.failing",
+                "temporality": "",
+                "timeAggregation": "latest",
+                "spaceAggregation": "max"
+              }
+            ],
+            "disabled": false,
+            "filter": {
+              "expression": ""
+            },
+            "groupBy": [
+              {
+                "name": "deployment.environment.name",
+                "fieldContext": "resource",
+                "fieldDataType": "string"
+              }
+            ],
+            "order": [],
+            "having": {
+              "expression": ""
+            },
+            "functions": [],
+            "legend": ""
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "critical",
+          "op": "above",
+          "matchType": "all_the_times",
+          "target": 0,
+          "channels": [
+            "faclab-correo",
+            "faclab-telegram"
+          ]
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "15m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "groupBy": [],
+    "usePolicy": false,
+    "renotify": {
+      "enabled": true,
+      "interval": "4h",
+      "alertStates": [
+        "firing"
+      ]
+    }
+  },
+  "labels": {
+    "faclab_rule": "wal-sin-archivar"
+  },
+  "annotations": {
+    "summary": "WAL sin archivar",
+    "description": "PostgreSQL no logra archivar el WAL fuera del servidor desde hace 15 minutos (faclab.backup.wal.failing): la recuperación a un punto en el tiempo pierde lo escrito desde entonces y el WAL se acumula en el disco. Valor: {{$value}} (umbral {{$threshold}}). Runbook: https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/respaldos.md",
+    "runbook_url": "https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/respaldos.md"
+  },
+  "disabled": false
+}

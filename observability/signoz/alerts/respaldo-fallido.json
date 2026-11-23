@@ -1,0 +1,98 @@
+{
+  "alert": "Respaldo fallido",
+  "alertType": "METRIC_BASED_ALERT",
+  "description": "La última corrida de un trabajo de respaldo (completo, incremental o copia de comprobantes) falló (faclab.backup.failed, por faclab.backup.job).",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "source": "",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "faclab.backup.failed",
+                "temporality": "",
+                "timeAggregation": "latest",
+                "spaceAggregation": "max"
+              }
+            ],
+            "disabled": false,
+            "filter": {
+              "expression": ""
+            },
+            "groupBy": [
+              {
+                "name": "faclab.backup.job",
+                "fieldContext": "attribute",
+                "fieldDataType": "string"
+              },
+              {
+                "name": "deployment.environment.name",
+                "fieldContext": "resource",
+                "fieldDataType": "string"
+              }
+            ],
+            "order": [],
+            "having": {
+              "expression": ""
+            },
+            "functions": [],
+            "legend": ""
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "op": "above",
+          "matchType": "last",
+          "target": 0,
+          "channels": [
+            "faclab-correo"
+          ]
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "15m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "groupBy": [
+      "faclab.backup.job"
+    ],
+    "usePolicy": false,
+    "renotify": {
+      "enabled": true,
+      "interval": "4h",
+      "alertStates": [
+        "firing"
+      ]
+    }
+  },
+  "labels": {
+    "faclab_rule": "respaldo-fallido"
+  },
+  "annotations": {
+    "summary": "Respaldo fallido",
+    "description": "La última corrida de un trabajo de respaldo (completo, incremental o copia de comprobantes) falló (faclab.backup.failed, por faclab.backup.job). Valor: {{$value}} (umbral {{$threshold}}). Runbook: https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/respaldos.md",
+    "runbook_url": "https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/respaldos.md"
+  },
+  "disabled": false
+}

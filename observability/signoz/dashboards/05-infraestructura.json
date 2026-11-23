@@ -10,7 +10,7 @@
   "spec": {
     "display": {
       "name": "Faclab · Base de datos e infraestructura",
-      "description": "¿Hay saturación de recursos? Host, contenedores, PostgreSQL y Kafka."
+      "description": "¿Hay saturación de recursos? Host, contenedores, PostgreSQL, Kafka y respaldos."
     },
     "variables": [
       {
@@ -1172,6 +1172,381 @@
           ],
           "links": []
         }
+      },
+      "backup-age": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Edad del último respaldo de PostgreSQL",
+            "description": "Consulta: faclab.backup.age (último valor) por faclab.backup.kind: full es el último completo, any el último de cualquier tipo. Unidad: segundos. Umbral: 26 h para cualquiera, 8 días para el completo (regla respaldo-atrasado). Acción: runbook respaldos"
+          },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "fillSpans": false
+              },
+              "formatting": {
+                "unit": "s",
+                "decimalPrecision": "2"
+              },
+              "chartAppearance": {
+                "lineInterpolation": "spline",
+                "showPoints": false,
+                "lineStyle": "solid",
+                "fillMode": "none",
+                "spanGaps": {
+                  "fillOnlyBelow": false,
+                  "fillLessThan": ""
+                }
+              },
+              "axes": {
+                "softMin": 0.0,
+                "softMax": null,
+                "isLogScale": false
+              },
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "customColors": {}
+              },
+              "thresholds": [
+                {
+                  "value": 93600,
+                  "unit": "s",
+                  "color": "#FFA940",
+                  "label": "26 h"
+                }
+              ]
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "metrics",
+                    "source": "",
+                    "stepInterval": 60,
+                    "aggregations": [
+                      {
+                        "metricName": "faclab.backup.age",
+                        "temporality": "",
+                        "timeAggregation": "latest",
+                        "spaceAggregation": "max"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment.name IN $env"
+                    },
+                    "groupBy": [
+                      {
+                        "name": "faclab.backup.kind",
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string"
+                      },
+                      {
+                        "name": "deployment.environment.name",
+                        "fieldContext": "resource",
+                        "fieldDataType": "string"
+                      }
+                    ],
+                    "order": [],
+                    "having": {
+                      "expression": ""
+                    },
+                    "functions": [],
+                    "legend": "{{faclab.backup.kind}} {{deployment.environment.name}}"
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
+      },
+      "backup-objects-age": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Edad de la copia de comprobantes",
+            "description": "Consulta: faclab.backup.objects.age (último valor): desde la última copia buena de los comprobantes fuera del servidor. Unidad: segundos. Umbral: 1 h (regla respaldo-atrasado). Acción: runbook respaldos"
+          },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "fillSpans": false
+              },
+              "formatting": {
+                "unit": "s",
+                "decimalPrecision": "2"
+              },
+              "chartAppearance": {
+                "lineInterpolation": "spline",
+                "showPoints": false,
+                "lineStyle": "solid",
+                "fillMode": "none",
+                "spanGaps": {
+                  "fillOnlyBelow": false,
+                  "fillLessThan": ""
+                }
+              },
+              "axes": {
+                "softMin": 0.0,
+                "softMax": null,
+                "isLogScale": false
+              },
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "customColors": {}
+              },
+              "thresholds": [
+                {
+                  "value": 3600,
+                  "unit": "s",
+                  "color": "#FFA940",
+                  "label": "1 h"
+                }
+              ]
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "metrics",
+                    "source": "",
+                    "stepInterval": 60,
+                    "aggregations": [
+                      {
+                        "metricName": "faclab.backup.objects.age",
+                        "temporality": "",
+                        "timeAggregation": "latest",
+                        "spaceAggregation": "max"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment.name IN $env"
+                    },
+                    "groupBy": [
+                      {
+                        "name": "deployment.environment.name",
+                        "fieldContext": "resource",
+                        "fieldDataType": "string"
+                      }
+                    ],
+                    "order": [],
+                    "having": {
+                      "expression": ""
+                    },
+                    "functions": [],
+                    "legend": "{{deployment.environment.name}}"
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
+      },
+      "backup-failed": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Trabajos de respaldo fallidos",
+            "description": "Consulta: faclab.backup.failed (último valor) por faclab.backup.job: 1 si la última corrida de ese trabajo falló. Unidad: 0 o 1. Umbral: mayor que 0 (regla respaldo-fallido). Acción: runbook respaldos"
+          },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "fillSpans": false
+              },
+              "formatting": {
+                "unit": "",
+                "decimalPrecision": "2"
+              },
+              "chartAppearance": {
+                "lineInterpolation": "spline",
+                "showPoints": false,
+                "lineStyle": "solid",
+                "fillMode": "none",
+                "spanGaps": {
+                  "fillOnlyBelow": false,
+                  "fillLessThan": ""
+                }
+              },
+              "axes": {
+                "softMin": 0.0,
+                "softMax": null,
+                "isLogScale": false
+              },
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "customColors": {}
+              },
+              "thresholds": [
+                {
+                  "value": 1,
+                  "unit": "",
+                  "color": "#F5222D",
+                  "label": "falló"
+                }
+              ]
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "metrics",
+                    "source": "",
+                    "stepInterval": 60,
+                    "aggregations": [
+                      {
+                        "metricName": "faclab.backup.failed",
+                        "temporality": "",
+                        "timeAggregation": "latest",
+                        "spaceAggregation": "max"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment.name IN $env"
+                    },
+                    "groupBy": [
+                      {
+                        "name": "faclab.backup.job",
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string"
+                      },
+                      {
+                        "name": "deployment.environment.name",
+                        "fieldContext": "resource",
+                        "fieldDataType": "string"
+                      }
+                    ],
+                    "order": [],
+                    "having": {
+                      "expression": ""
+                    },
+                    "functions": [],
+                    "legend": "{{faclab.backup.job}} {{deployment.environment.name}}"
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
+      },
+      "backup-wal": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "WAL pendiente de archivar",
+            "description": "Consulta: faclab.backup.wal.pending (último valor): segmentos de 16 MB en pg_wal/archive_status esperando a pgBackRest; faclab.backup.wal.failing marca si el archivo falla. Unidad: segmentos. Umbral: informativo, normal 0 a 2; la regla wal-sin-archivar mira la falla. Acción: runbook respaldos"
+          },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "fillSpans": false
+              },
+              "formatting": {
+                "unit": "",
+                "decimalPrecision": "2"
+              },
+              "chartAppearance": {
+                "lineInterpolation": "spline",
+                "showPoints": false,
+                "lineStyle": "solid",
+                "fillMode": "none",
+                "spanGaps": {
+                  "fillOnlyBelow": false,
+                  "fillLessThan": ""
+                }
+              },
+              "axes": {
+                "softMin": 0.0,
+                "softMax": null,
+                "isLogScale": false
+              },
+              "legend": {
+                "position": "bottom",
+                "mode": "list",
+                "customColors": {}
+              },
+              "thresholds": []
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "metrics",
+                    "source": "",
+                    "stepInterval": 60,
+                    "aggregations": [
+                      {
+                        "metricName": "faclab.backup.wal.pending",
+                        "temporality": "",
+                        "timeAggregation": "latest",
+                        "spaceAggregation": "max"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment.name IN $env"
+                    },
+                    "groupBy": [
+                      {
+                        "name": "deployment.environment.name",
+                        "fieldContext": "resource",
+                        "fieldDataType": "string"
+                      }
+                    ],
+                    "order": [],
+                    "having": {
+                      "expression": ""
+                    },
+                    "functions": [],
+                    "legend": "{{deployment.environment.name}}"
+                  }
+                }
+              }
+            }
+          ],
+          "links": []
+        }
       }
     },
     "layouts": [
@@ -1321,6 +1696,55 @@
               "height": 5,
               "content": {
                 "$ref": "#/spec/panels/kafka-replicas"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "kind": "Grid",
+        "spec": {
+          "display": {
+            "title": "Respaldos",
+            "collapse": {
+              "open": true
+            }
+          },
+          "items": [
+            {
+              "x": 0,
+              "y": 0,
+              "width": 6,
+              "height": 5,
+              "content": {
+                "$ref": "#/spec/panels/backup-age"
+              }
+            },
+            {
+              "x": 6,
+              "y": 0,
+              "width": 6,
+              "height": 5,
+              "content": {
+                "$ref": "#/spec/panels/backup-objects-age"
+              }
+            },
+            {
+              "x": 0,
+              "y": 5,
+              "width": 6,
+              "height": 5,
+              "content": {
+                "$ref": "#/spec/panels/backup-failed"
+              }
+            },
+            {
+              "x": 6,
+              "y": 5,
+              "width": 6,
+              "height": 5,
+              "content": {
+                "$ref": "#/spec/panels/backup-wal"
               }
             }
           ]
