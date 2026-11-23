@@ -10,6 +10,10 @@
 #   data    internal  postgres, kafka, object-storage, the services and the collector
 #
 # Kafka speaks PLAINTEXT only inside `data` (G-49 mitigated by isolation: no port, no kafka-ui).
+#
+# The images of core, invoicing, web and the edge Caddy come from GHCR, published by the release
+# workflow of each repository (S8.2): *_VERSION (a tag) names them, and *_IMAGE, when set, pins them
+# by digest. stack.sh passes both from /etc/faclab/deployments/current.env (what is deployed).
 # Secrets the applications read from a file are mounted from /etc/faclab/secrets (Compose outside
 # Swarm bind-mounts them as they are: each file belongs to the uid that reads it); the rest come in
 # through interpolation and are visible to `docker inspect` on the host, never in an image.
@@ -91,8 +95,9 @@ services:
   # (caddy/Caddyfile). Built here with the rate limit module (caddy/Dockerfile)
   caddy:
     <<: *service
+    # Published by faclab-infra's release workflow from ./caddy; CI builds it from there
     build: ./caddy
-    image: faclab-local/caddy:${CADDY_VERSION:-2.11.9}
+    image: ${CADDY_IMAGE:-${IMAGE_REGISTRY:-ghcr.io/faclab-ec}/faclab-caddy:${INFRA_VERSION:?}}
     environment:
       APP_DOMAIN: ${APP_DOMAIN:?}
       API_DOMAIN: ${API_DOMAIN:?}
@@ -136,7 +141,7 @@ services:
   # The SPA, served by its own Caddy without TLS; /config.js is written at start from these URLs
   web:
     <<: *service
-    image: ${WEB_IMAGE:?}
+    image: ${WEB_IMAGE:-${IMAGE_REGISTRY:-ghcr.io/faclab-ec}/faclab-web:${WEB_VERSION:?}}
     environment:
       API_BASE_URL: https://${API_DOMAIN:?}
       INVOICING_API_URL: https://${API_DOMAIN:?}
@@ -154,7 +159,7 @@ services:
 
   core-api:
     <<: *service
-    image: ${CORE_IMAGE:?}
+    image: ${CORE_IMAGE:-${IMAGE_REGISTRY:-ghcr.io/faclab-ec}/faclab-api:${CORE_VERSION:?}}
     environment:
       <<: *core-env
       RUN_BACKGROUND: "false"
@@ -176,7 +181,7 @@ services:
   # Outbox relay, Kafka consumer, webhooks and periodic tasks (ADR-0007)
   core-worker:
     <<: *service
-    image: ${CORE_IMAGE:?}
+    image: ${CORE_IMAGE:-${IMAGE_REGISTRY:-ghcr.io/faclab-ec}/faclab-api:${CORE_VERSION:?}}
     command: ["python", "worker.py"]
     environment: *core-env
     secrets: *core-secrets
@@ -204,7 +209,7 @@ services:
 
   invoicing-api:
     <<: *service
-    image: ${INVOICING_IMAGE:?}
+    image: ${INVOICING_IMAGE:-${IMAGE_REGISTRY:-ghcr.io/faclab-ec}/faclab-invoicing:${INVOICING_VERSION:?}}
     environment:
       <<: *invoicing-env
       RUN_BACKGROUND: "false"
@@ -226,7 +231,7 @@ services:
   # document in progress: up to two SRI calls of SRI_TIMEOUT_MS (30 s)
   invoicing-worker:
     <<: *service
-    image: ${INVOICING_IMAGE:?}
+    image: ${INVOICING_IMAGE:-${IMAGE_REGISTRY:-ghcr.io/faclab-ec}/faclab-invoicing:${INVOICING_VERSION:?}}
     command: ["node", "-r", "./dist/instrumentation.js", "dist/worker.js"]
     environment: *invoicing-env
     read_only: true
@@ -432,7 +437,7 @@ services:
   # One-off tasks (profile tasks), run by scripts/stack.sh migrate before the services start.
   # db_roles also needs DATABASE_URL_ADMIN, which stack.sh passes only to that run
   core-migrate:
-    image: ${CORE_IMAGE:?}
+    image: ${CORE_IMAGE:-${IMAGE_REGISTRY:-ghcr.io/faclab-ec}/faclab-api:${CORE_VERSION:?}}
     profiles: [tasks]
     restart: "no"
     logging: *logging
@@ -454,7 +459,7 @@ services:
       - data
 
   invoicing-migrate:
-    image: ${INVOICING_IMAGE:?}
+    image: ${INVOICING_IMAGE:-${IMAGE_REGISTRY:-ghcr.io/faclab-ec}/faclab-invoicing:${INVOICING_VERSION:?}}
     profiles: [tasks]
     restart: "no"
     logging: *logging

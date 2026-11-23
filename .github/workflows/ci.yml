@@ -40,8 +40,14 @@ jobs:
       - name: ShellCheck
         run: shellcheck scripts/*.sh deploy/production/scripts/*.sh
 
-      # deploy/production (S8.1): compose with each env file, the edge Caddy (image and Caddyfile in
-      # both TLS modes), the Collector with its production overlay, and no secret file versioned
+      # The workflows (S8.2): release and deploy only run on a tag or by hand, so this is what
+      # checks them on every PR. The image brings shellcheck for their run: blocks
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo:ro" --workdir /repo rhysd/actionlint:1.7.12 -color
+
+      # deploy/production (S8.1, S8.2): compose with each env and versions file, the versions against
+      # the compatibility matrix, the edge Caddy (image and Caddyfile in both TLS modes), the
+      # Collector with its production overlay, and no secret file versioned
       - name: Validate the production stack
         run: deploy/production/scripts/ci-validate.sh
 
