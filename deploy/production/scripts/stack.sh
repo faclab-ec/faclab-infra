@@ -59,8 +59,9 @@ die() {
   exit 1
 }
 
+# A heading with the time (UTC): how long each step takes is in the log
 step() {
-  printf '\n== %s\n' "$*"
+  printf '\n== %s  [%s]\n' "$*" "$(date -u +%H:%M:%S)"
 }
 
 need_root() {
@@ -513,8 +514,9 @@ deploy() {
     [ -f "$current" ] && mv "$current" "$STATE/previous.env"
     mv "$target" "$current"
     record "${FACLAB_DEPLOY_KIND:-deployed}" "$(versions_of "$current") (backup $id)"
+    step "Pruning images of older versions"
     prune_images
-    printf '\nDeployed: %s\n' "$(versions_of "$current")"
+    printf '\nDeployed: %s (%ss)\n' "$(versions_of "$current")" "$SECONDS"
     return 0
   fi
 
