@@ -248,7 +248,8 @@ vez no hay versión anterior: si algo falla, lo dice y no revierte nada.
    2. el rol y la base de invoicing (`init-invoicing-db.sh`);
    3. los roles y la base del core (`db_roles`, con el superusuario solo en esa corrida);
    4. las migraciones del core (como `faclab_owner`) y las de invoicing;
-   5. con `BACKUPS=on`, el stanza de pgBackRest en el repositorio externo.
+   5. con `BACKUPS=on`, el stanza de pgBackRest en el repositorio externo y el archivo de WAL
+      encendido (`ALTER SYSTEM`; la primera vez reinicia PostgreSQL).
 4. **Servicios en orden,** cada grupo sano antes del siguiente:
    - infra: PostgreSQL, Kafka y sus tópicos, Garage, el Collector y Caddy;
    - invoicing;

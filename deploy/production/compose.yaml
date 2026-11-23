@@ -257,9 +257,16 @@ services:
   # run by scripts/stack.sh) and faclab_invoicing (role and database from init-invoicing-db.sh).
   # The official image plus pgBackRest (postgres/Dockerfile, S8.3): with BACKUPS=on every WAL segment
   # goes, encrypted, to a bucket outside the server, at most archive_timeout seconds after it was
-  # written, and scripts/backups.sh takes the full and incremental backups (RESPALDOS.md)
+  # written, and scripts/backups.sh takes the full and incremental backups (RESPALDOS.md). The
+  # archiving settings aren't here but in postgresql.auto.conf: stack.sh migrate sets them (ALTER
+  # SYSTEM) once the repository has its stanza, so a new data directory initializes without
+  # archiving, and a restored one keeps what it brings
   postgres:
     <<: *service
+    # docker-init as PID 1: it reaps the background processes pgBackRest leaves (asynchronous
+    # archiving). With PostgreSQL as PID 1, the postmaster adopts them and takes one that ends with an
+    # error for a crashed backend: it restarts every connection
+    init: true
     # Published by faclab-infra's release workflow from ./postgres; CI builds it from there
     build:
       context: ./postgres
@@ -278,15 +285,6 @@ services:
       - maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-128MB}
       - -c
       - max_connections=${POSTGRES_MAX_CONNECTIONS:-150}
-      # off on a server that only restores (a drill): it must not write into the repository of the
-      # server it comes from
-      - -c
-      - archive_mode=${BACKUPS:-on}
-      - -c
-      - archive_command=pgbackrest --stanza=faclab archive-push %p
-      # A segment leaves at most this long after a write, even with little traffic: the RPO
-      - -c
-      - archive_timeout=${POSTGRES_ARCHIVE_TIMEOUT:-60}
     environment:
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_INITDB_ARGS: --data-checksums

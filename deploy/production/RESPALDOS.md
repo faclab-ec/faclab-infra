@@ -58,10 +58,20 @@ de WAL en el bucket.
   [configuración](postgres/pgbackrest.conf). Archiva cada segmento de WAL con
   `archive_command`. Está en la red `backup`, la única con salida a Internet además de `egress`, y
   nadie más la comparte salvo la tarea de copia de objetos.
+- **docker-init es el PID 1 del contenedor** (`init: true`). Recoge los procesos que pgBackRest deja
+  en segundo plano al archivar. Sin él, PostgreSQL los adopta y, cuando uno termina con error (el
+  repositorio no responde), lo toma por un proceso propio caído y reinicia todas las conexiones. Lo
+  encontró el simulacro de S8.3.
+- **El archivo de WAL no está en la línea de comandos.** Va en `postgresql.auto.conf`
+  (`ALTER SYSTEM`), y lo pone `stack.sh migrate` después de crear el stanza; cambiar `archive_mode`
+  reinicia PostgreSQL una vez. Así, una base nueva se inicializa sin archivar (el stanza aún no
+  existe y el servidor temporal de la imagen no podría apagarse), y una base restaurada trae lo suyo.
 - **El interruptor `BACKUPS`** del entorno (`env/<entorno>.env`):
-  - con `on`, `stack.sh deploy` crea el stanza, instala los timers y lanza el primer completo si no
-    hay ninguno;
+  - con `on`, `stack.sh deploy` crea el stanza, enciende el archivo de WAL, instala los timers y lanza
+    el primer completo si no hay ninguno;
   - con `off` (un servidor que solo restaura), PostgreSQL no archiva y no hay timers.
+    `stack.sh restore` lo restaura con `--archive-mode=off`, para que no escriba en el repositorio
+    del que viene.
 - **Los timers de systemd** ([systemd/](systemd/)) corren
   [`scripts/backups.sh`](scripts/backups.sh):
 

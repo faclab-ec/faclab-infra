@@ -322,11 +322,17 @@ migrate() {
   echo "faclab-invoicing: migrations..."
   compose run --rm --no-deps invoicing-migrate
 
-  # Idempotent. A repository out of reach doesn't fail the deployment: the WAL waits in the spool,
-  # and the alerts wal-sin-archivar and respaldo-atrasado say so (RESPALDOS.md)
+  # Idempotent. A repository out of reach doesn't fail the deployment: the WAL waits in pg_wal and
+  # the alerts wal-sin-archivar and respaldo-atrasado say so (RESPALDOS.md)
   if backups_on; then
     echo "pgBackRest: stanza in the repository..."
-    backup_stanza || echo "stack.sh: WARNING: pgBackRest couldn't create or check its stanza; WAL isn't being archived (backups.sh status)" >&2
+    if backup_stanza; then
+      wal_archiving on
+    else
+      echo "stack.sh: WARNING: pgBackRest couldn't create or check its stanza, so WAL isn't archived yet: deploy again once the repository answers (backups.sh status)" >&2
+    fi
+  else
+    wal_archiving off
   fi
 }
 
@@ -351,6 +357,28 @@ backup_stanza() {
   done
   printf '%s\n' "$output" >&2
   return 1
+}
+
+# wal_archiving <on|off>: PostgreSQL's archiving, in postgresql.auto.conf (ALTER SYSTEM). archive_mode
+# needs a restart, only when it changes; the command and its timeout, a reload. archive_timeout is
+# the RPO: a segment leaves at most that long after a write, even with little traffic
+wal_archiving() {
+  local mode="$1" timeout current
+  timeout="$(env_value POSTGRES_ARCHIVE_TIMEOUT)"
+  timeout="${timeout:-60}"
+  [[ "$timeout" =~ ^[0-9]+$ ]] || die "POSTGRES_ARCHIVE_TIMEOUT must be a number of seconds"
+  psql_value postgres "alter system set archive_command = 'pgbackrest --stanza=faclab archive-push %p'" > /dev/null
+  psql_value postgres "alter system set archive_timeout = '$timeout'" > /dev/null
+  psql_value postgres "alter system set archive_mode = '$mode'" > /dev/null
+  current="$(psql_value postgres "show archive_mode")"
+  if [ "$current" = "$mode" ]; then
+    psql_value postgres "select pg_reload_conf()" > /dev/null
+    echo "PostgreSQL: WAL archiving $mode"
+    return 0
+  fi
+  echo "PostgreSQL: WAL archiving $current -> $mode, restarting it..."
+  compose restart postgres
+  compose up -d --wait postgres
 }
 
 # The timers of scripts/backups.sh, installed or removed as BACKUPS says, after a deployment
@@ -790,6 +818,9 @@ restore() {
   step "Restoring PostgreSQL ($target)"
   args=(--delta)
   [ "$target" = latest ] || args+=(--type=time "--target=$target" --target-action=promote)
+  # A server that only restores (a drill) must not archive into the repository it comes from: the
+  # restored postgresql.auto.conf would keep archiving on
+  backups_on || args+=(--archive-mode=off)
   VERSIONS="$versions" compose run --rm --no-deps -T -u postgres postgres \
     pgbackrest --stanza=faclab restore "${args[@]}"
 
