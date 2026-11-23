@@ -1,0 +1,5 @@
+# Global options when CADDY_TLS_MODE=internal (a staging machine without public DNS): Caddy's own
+# certificate authority signs every certificate. Its root is in /data/caddy/pki/authorities/local/
+# root.crt of the container; clients must trust it explicitly (README, staging)
+local_certs
+skip_install_trust
