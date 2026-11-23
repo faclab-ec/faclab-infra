@@ -167,11 +167,17 @@ state() {
 measure() {
   local now info last_full last_any count archiver archived failed pending job objects_ok
   now="$(date +%s)"
-  info="$(pgbackrest info --output=json 2> /dev/null)" || info='[]'
-  last_full="$(jq '[.[0].backup[]? | select(.type == "full") | .timestamp.stop] | max // empty' <<< "$info")"
-  last_any="$(jq '[.[0].backup[]? | .timestamp.stop] | max // empty' <<< "$info")"
-  count="$(jq '[.[0].backup[]?] | length' <<< "$info")"
-  echo "faclab.backup.count 1 - ${count:-0}"
+  if info="$(pgbackrest info --output=json 2> /dev/null)"; then
+    last_full="$(jq '[.[0].backup[]? | select(.type == "full") | .timestamp.stop] | max // empty' <<< "$info")"
+    last_any="$(jq '[.[0].backup[]? | .timestamp.stop] | max // empty' <<< "$info")"
+    count="$(jq '[.[0].backup[]?] | length' <<< "$info")"
+    echo "faclab.backup.count 1 - ${count:-0}"
+  else
+    # The repository doesn't answer: its backups may well be there. The last good runs this server
+    # recorded tell how late they are; the failure itself shows in the jobs and the WAL
+    last_full="$(state full last_ok)"
+    last_any="$(printf '%s\n%s\n' "$last_full" "$(state incr last_ok)" | sort -n | tail -n 1)"
+  fi
   [ -z "$last_full" ] || echo "faclab.backup.age s faclab.backup.kind=full $((now - last_full))"
   [ -z "$last_any" ] || echo "faclab.backup.age s faclab.backup.kind=any $((now - last_any))"
   late "$last_full" "$MAX_AGE_FULL" full "$now"
