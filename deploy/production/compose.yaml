@@ -444,6 +444,10 @@ services:
       RCLONE_CONFIG_ARCHIVE_SECRET_ACCESS_KEY: ${BACKUP_OBJECTS_SECRET_ACCESS_KEY:?}
       # The key may write and read, never create buckets nor delete
       RCLONE_CONFIG_ARCHIVE_NO_CHECK_BUCKET: "true"
+      # A bucket with Object Lock takes no object without Content-MD5 (or a checksum header), and
+      # through crypt rclone doesn't know the encrypted object's hash before sending it. In multipart
+      # uploads it reads each part first and sends its MD5: every object goes that way
+      RCLONE_CONFIG_ARCHIVE_UPLOAD_CUTOFF: "0"
     volumes:
       - ./scripts/objects-backup.sh:/scripts/objects-backup.sh:ro
     user: "65534:65534"

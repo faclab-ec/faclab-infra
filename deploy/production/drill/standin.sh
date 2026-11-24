@@ -142,9 +142,11 @@ up() {
   fi
   aws s3api put-object-lock-configuration --bucket "$OBJECTS_BUCKET" --object-lock-configuration \
     "{\"ObjectLockEnabled\":\"Enabled\",\"Rule\":{\"DefaultRetention\":{\"Mode\":\"COMPLIANCE\",\"Days\":$RETENTION_DAYS}}}"
-  # Write and read, never delete: a changed object is a new version, kept RETENTION_DAYS
+  # Write and read, never delete: a changed object is a new version, kept RETENTION_DAYS. Uploads
+  # are multipart (compose.yaml, objects-backup), whose abort cleans a failed one
   policy "$OBJECTS_BUCKET" "$(value OBJECTS_ACCESS_KEY)" ListBucket ListBucketVersions GetBucketLocation \
-    GetBucketVersioning GetBucketObjectLockConfiguration GetObject GetObjectVersion GetObjectRetention PutObject
+    GetBucketVersioning GetBucketObjectLockConfiguration GetObject GetObjectVersion GetObjectRetention PutObject \
+    AbortMultipartUpload ListMultipartUploadParts
 
   echo "Stand-in ready on port $PORT (https, self-signed):"
   echo "  $PG_BUCKET: pgBackRest's, for the key $(value PG_ACCESS_KEY)"

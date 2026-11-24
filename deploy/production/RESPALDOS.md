@@ -128,7 +128,12 @@ Object Lock, en otra empresa y otra región que el servidor: Backblaze B2, AWS S
    años.
 3. **Dos llaves de acceso**, cada una limitada a su bucket:
    - la de pgBackRest lista, lee, escribe y borra;
-   - la de los comprobantes lista, lee y escribe, **sin permiso de borrar**.
+   - la de los comprobantes lista, lee y escribe (también por partes: `AbortMultipartUpload`), **sin
+     permiso de borrar** ni de cambiar la retención.
+
+   Un bucket con Object Lock rechaza un objeto sin `Content-MD5`. Como rclone cifra al vuelo y no
+   conoce ese hash de antemano, sube todo por partes (`upload_cutoff=0` en `compose.yaml`) y envía el
+   MD5 de cada una. Lo encontró el simulacro de S8.3.
 4. **La configuración del entorno** (`env/<entorno>.env`), que no es secreta:
    - `BACKUPS=on`;
    - `BACKUP_S3_ENDPOINT` (el host, sin `https://`) y `BACKUP_S3_REGION`;
