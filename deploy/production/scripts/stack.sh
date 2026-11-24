@@ -747,6 +747,11 @@ restore_versions() {
   info="$(VERSIONS="$versions" compose run --rm --no-deps -T -u postgres postgres \
     pgbackrest --stanza=faclab info --output=json)" ||
     die "pgBackRest couldn't read the repository (its endpoint, bucket and keys are in env/ and secrets.env)"
+  # It answers 0 even when the repository doesn't: the status of its JSON says it
+  if ! jq -e '.[0].status.code == 0' <<< "$info" > /dev/null; then
+    jq -r '"pgBackRest: " + (.[0].status.message // "?") + ([.[0].repo[]?.status.message] | map("; " + .) | join(""))' <<< "$info" >&2
+    die "the repository has no backup to restore from"
+  fi
   if [ "$target" = latest ]; then
     epoch=99999999999
   else

@@ -163,11 +163,18 @@ state() {
   jq -r ".$2 // empty" "$STATE/last-$1.json" 2> /dev/null || true
 }
 
+# info_ok <json>: pgBackRest could read the repository (status 0, or 2: a stanza without backups)
+info_ok() {
+  jq -e '.[0].status.code == 0 or .[0].status.code == 2' <<< "$1" > /dev/null 2>&1
+}
+
 # The lines metrics_json reads
 measure() {
   local now info last_full last_any count archiver archived failed pending job objects_ok
   now="$(date +%s)"
-  if info="$(pgbackrest info --output=json 2> /dev/null)"; then
+  # pgBackRest answers 0 even when the repository doesn't: its JSON says how it went (0 backups
+  # found, 2 a stanza without backups, anything else an error)
+  if info="$(pgbackrest info --output=json 2> /dev/null)" && info_ok "$info"; then
     last_full="$(jq '[.[0].backup[]? | select(.type == "full") | .timestamp.stop] | max // empty' <<< "$info")"
     last_any="$(jq '[.[0].backup[]? | .timestamp.stop] | max // empty' <<< "$info")"
     count="$(jq '[.[0].backup[]?] | length' <<< "$info")"
@@ -250,7 +257,7 @@ status() {
 }
 
 install_timers() {
-  local unit name count
+  local unit name code
   [ -d "$UNITS" ] || die "$UNITS doesn't exist: is this a systemd host?"
   for unit in "$HERE"/systemd/faclab-backup@*; do
     name="$(basename "$unit")"
@@ -263,8 +270,9 @@ install_timers() {
     systemctl enable --now --quiet "faclab-backup@$name.timer"
   done
   echo "Backup timers enabled (systemctl list-timers 'faclab-backup@*')"
-  count="$(pgbackrest info --output=json 2> /dev/null | jq '[.[0].backup[]?] | length' || echo unknown)"
-  if [ "$count" = 0 ]; then
+  # Status 2: the stanza exists and has no backup yet
+  code="$(pgbackrest info --output=json 2> /dev/null | jq '.[0].status.code' || echo unknown)"
+  if [ "$code" = 2 ]; then
     systemctl start --no-block faclab-backup@full.service
     echo "No backup in the repository yet: the first full backup started (journalctl -u faclab-backup@full)"
   fi
