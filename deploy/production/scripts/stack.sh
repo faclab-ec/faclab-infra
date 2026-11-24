@@ -742,8 +742,18 @@ restore_predeploy() {
 # one that ended before it): "infra core invoicing web", empty fields when it has no notes. Asked
 # with the postgres image of what runs, or of versions/<environment>.env on a clean server
 restore_versions() {
-  local target="$1" versions="$STATE/current.env" info epoch
-  [ -f "$versions" ] || versions="$HERE/versions/$(environment).env"
+  local target="$1" versions="$STATE/current.env" info epoch infra
+  if [ ! -f "$versions" ]; then
+    versions="$HERE/versions/$(environment).env"
+  fi
+  if [ ! -f "$versions" ]; then
+    # Only its PostgreSQL image reads the repository: the faclab-infra tag checked out says which
+    infra="$(repo_git describe --tags --exact-match HEAD 2> /dev/null)" ||
+      die "nothing says which faclab-infra to read the repository with: check out a tag (git checkout vX.Y.Z) or pass the four versions"
+    versions="$(mktemp)"
+    printf 'INFRA_VERSION=%s\nCORE_VERSION=%s\nINVOICING_VERSION=%s\nWEB_VERSION=%s\n' \
+      "${infra#v}" "${infra#v}" "${infra#v}" "${infra#v}" > "$versions"
+  fi
   info="$(VERSIONS="$versions" compose run --rm --no-deps -T -u postgres postgres \
     pgbackrest --stanza=faclab info --output=json)" ||
     die "pgBackRest couldn't read the repository (its endpoint, bucket and keys are in env/ and secrets.env)"
