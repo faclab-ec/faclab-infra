@@ -458,17 +458,25 @@ up_group() {
 
 # bring_up <versions file>: the services in order, each group checked before the next
 bring_up() {
-  local VERSIONS="$1"
+  local VERSIONS="$1" before recreate=()
   step "infra (faclab-infra $(file_value "$1" INFRA_VERSION))"
+  before="$(compose ps -q postgres 2> /dev/null || true)"
   up_group "${INFRA_SERVICES[@]}"
   answers http://collector:13133/
+  # A new PostgreSQL container (its image changed with faclab-infra): the applications that kept
+  # running hold pooled connections to the old one, and each would fail one request. They start
+  # again with new ones
+  if [ -n "$before" ] && [ "$before" != "$(compose ps -q postgres)" ]; then
+    echo "PostgreSQL was recreated: the applications are recreated too"
+    recreate=(--force-recreate)
+  fi
 
   step "faclab-invoicing $(file_value "$1" INVOICING_VERSION)"
-  up_group invoicing-api invoicing-worker
+  up_group "${recreate[@]}" invoicing-api invoicing-worker
   answers http://invoicing-api:3173/health
 
   step "faclab-core $(file_value "$1" CORE_VERSION)"
-  up_group core-api core-worker
+  up_group "${recreate[@]}" core-api core-worker
   answers http://core-api:8080/health/ready
 
   step "faclab-web $(file_value "$1" WEB_VERSION)"
