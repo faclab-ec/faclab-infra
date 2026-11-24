@@ -628,8 +628,8 @@ Diferencias con un VPS real:
 - **No hay SigNoz propio:** el Collector envía al de faclab-infra en la Mac (`host.orb.internal:4317`),
   que reenvía al SigNoz local cuando está arriba; si no, reintenta y descarta lo que no cabe en su cola
   (S8.6).
-- **Los respaldos van al sustituto de S3** de `drill/` en la Mac, no a un proveedor
-  ([RESPALDOS.md](RESPALDOS.md#el-sustituto-de-staging)).
+- **Respaldos apagados** (`BACKUPS=off`) hasta el primer VPS. S8.3 los probó contra el sustituto de
+  S3 de `drill/` en la Mac ([RESPALDOS.md](RESPALDOS.md#el-sustituto-de-staging)).
 - **El workflow `Deploy` no llega a la VM,** porque no tiene IP pública: en S8.2 se desplegó desde la
   Mac con `deploy.sh` y la misma llave restringida del CI. La primera corrida del workflow queda para
   el primer VPS.

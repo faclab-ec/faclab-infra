@@ -175,8 +175,12 @@ deploy/production/drill/standin.sh secret BACKUP_PG_ACCESS_KEY_ID |
 ```
 
 Su certificado es autofirmado: `env/staging.env` es el único lugar con `BACKUP_S3_VERIFY_TLS=n`, y el
-CI rechaza esa línea en el ejemplo de producción. Cuando llegue el proveedor real, staging cambia su
-endpoint, sus buckets y sus llaves, y tiene que hacer un completo nuevo.
+CI rechaza esa línea en el ejemplo de producción.
+
+Después del simulacro, staging quedó con `BACKUPS=off`: el sustituto corre en la Mac y no siempre
+está arriba, y sin él staging acumularía WAL y avisaría `wal-sin-archivar`. Para volver a probar,
+`BACKUPS=on` y `standin.sh up`. Cuando llegue el proveedor real, staging cambia su endpoint, sus
+buckets y sus llaves, enciende `BACKUPS` y hace un completo nuevo.
 
 ## Restaurar
 
