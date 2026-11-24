@@ -44,9 +44,9 @@ que sirve solo para volver atrás de ese despliegue y no sale del servidor.
 
 | | Objetivo | Medido en el simulacro |
 |---|---|---|
-| **RPO de PostgreSQL** (cuántos datos se pueden perder) | 5 minutos: `archive_timeout=60` y envío asíncrono | Ver el [registro](#registro-del-simulacro-de-s83) |
-| **RPO de los comprobantes** | 10 minutos: la copia corre cada 5. El SRI también conserva los autorizados | Ver el registro |
-| **RTO** (cuánto tarda volver a dar servicio en un servidor nuevo) | 2 horas, con los datos verificados | Ver el registro |
+| **RPO de PostgreSQL** (cuántos datos se pueden perder) | 5 minutos: `archive_timeout=60` y envío asíncrono | Menos de 77 s: una venta confirmada 77 s antes de restaurar se recuperó; la confirmada en el mismo segundo, no ([registro](#registro-del-simulacro-de-s83)) |
+| **RPO de los comprobantes** | 10 minutos: la copia corre cada 5. El SRI también conserva los autorizados | Cada corrida copió los XML y RIDE nuevos en menos de 30 s |
+| **RTO** (cuánto tarda volver a dar servicio en un servidor nuevo) | 2 horas, con los datos verificados | 10 minutos de máquina, con una base de 44 MB: servidor, restauración, comprobantes y verificaciones |
 
 Ajusta `POSTGRES_ARCHIVE_TIMEOUT` si el RPO cambia: menos segundos es menos pérdida y más segmentos
 de WAL en el bucket.
@@ -294,4 +294,80 @@ $S -d faclab_invoicing -c "select md5(string_agg(authorized_xml_key, ',' order b
 
 ### Registro del simulacro de S8.3
 
-Pendiente de completar con el simulacro.
+2026-11-24, en OrbStack. El origen fue staging (`faclab-staging`), con una empresa real de pruebas
+cuyo emisor estaba configurado en el ambiente de pruebas del SRI, y facturas autorizadas por celcer.
+El destino fue una VM limpia (`faclab-restore`, Ubuntu 24.04). El almacenamiento externo fue el
+sustituto de `drill/`.
+
+**Datos.** El resumen S1 de staging se tomó en T = 2026-11-24 12:06:37 -05:00. Para entonces había 4
+ventas (hasta V-001-000004) y 4 facturas autorizadas, sin facturas en vuelo. Después de T hubo 2
+ventas más, también autorizadas.
+
+**Restauración a T en el servidor limpio**, con faclab-infra 0.2.0-rc.5 (horas UTC):
+
+| Paso | Inicio | Duración |
+|---|---|---|
+| Crear y aprovisionar la VM (`provision-vps.sh`) | 2026-11-23 20:37:52 | 2 min 59 s |
+| Clonar faclab-infra en el tag y crear `env/drill.env` (`BACKUPS=off`) | 19:13:41 | 2 s |
+| `secrets.sh push` e `install-secrets drill` | 19:13:50 | 1 s |
+| `stack.sh restore '2026-11-24 12:06:37-05:00' --yes …` | 19:16:47 | 3 min 39 s |
+| `stack.sh restore-objects --yes` | 19:20:41 | 22 s |
+| Verificaciones (resumen, XML, `pg_amcheck`, API) | 19:21:10 | unos 2 min 30 s |
+| **Total de máquina** | | **unos 10 minutos** |
+
+Dentro de `restore`:
+- las imágenes, 1 min 21 s;
+- pgBackRest restauró el incremental de las 15:43 en 10 s;
+- PostgreSQL aplicó el WAL hasta T y se promovió en 5 s;
+- el despliegue completo, con sus comprobaciones, tardó el resto.
+
+**Verificaciones:**
+- **El resumen del servidor restaurado es idéntico a S1:**
+  - las ventas, sus líneas y pagos, con las mismas sumas;
+  - los movimientos y el stock;
+  - las facturas por estado y su último secuencial;
+  - el hash de las claves de los XML autorizados.
+
+  Las dos ventas posteriores a T no están.
+- **Los XML:** cada uno de los 4 autorizados de la base existe en el almacenamiento restaurado.
+  `restore-objects` trajo los 12 objetos de la copia, incluidos los de después de T.
+- **`pg_amcheck --all --heapallindexed`:** 1634 relaciones y 4055 páginas, sin daños.
+- **Por la API del servidor restaurado:**
+  - el login con la cuenta de staging funciona;
+  - el XML autorizado se descarga (`<estado>AUTORIZADO</estado>`), igual que el RIDE en PDF.
+
+**RPO, con `restore latest` en el mismo servidor** (faclab-infra 0.2.0-rc.8, en 4 min 18 s):
+
+1. un incremental en staging;
+2. la venta A a las 19:38:09;
+3. la venta B 77 s después;
+4. de inmediato, la restauración.
+
+A está y B no: su segmento de WAL salía en el minuto siguiente. Por defecto, `restore` tomó las
+versiones anotadas en el respaldo (rc.8), cambió el checkout del servidor y restauró con `--delta`.
+
+**Lo que el simulacro encontró y se corrigió antes de cerrarlo:**
+
+- **Reinicios de PostgreSQL.** El proceso asíncrono de pgBackRest lo reiniciaba al fallar. Se agregó
+  `init: true` y `CAP_KILL`; sin esta última, docker-init no podía detener PostgreSQL limpio.
+- **La inicialización de una base nueva no se podía apagar.** El archivo de WAL estaba en la línea
+  de comandos; ahora lo enciende `stack.sh migrate` después del stanza.
+- **`pgbackrest info` responde 0 aunque el repositorio no responda.** Ahora se lee el estado de su
+  JSON.
+- **La copia a un bucket con Object Lock fallaba.** Exige `Content-MD5`; ahora se sube por partes.
+- **Conexiones rotas después de reiniciar PostgreSQL.** Un despliegue que lo recreaba dejaba a las
+  aplicaciones con conexiones a un servidor detenido. Ahora se recrean también.
+- **Un `postmaster.pid` viejo impedía la restauración en el mismo servidor.** `restore` lo quita con
+  el contenedor detenido.
+
+Ajenos a los respaldos, anotados como pendientes en el core:
+
+- **ERROR 45 «secuencial registrado».** La primera factura de staging lo recibió: el SRI ya tenía
+  ese secuencial del mismo RUC, de otro entorno. Es el mismo caso de una restauración con pérdida:
+  se avanzó la secuencia con `PUT /api/sequences/001/001` y se reenvió.
+- **El consumidor de Kafka de faclab-invoicing no se recupera solo.** Después de una suspensión de la
+  VM (superó `max.poll.interval.ms`), salió del grupo y no volvió a entrar hasta reiniciar el worker.
+
+**Escala.** La base era de 44 MB. El tiempo de pgBackRest crece con el tamaño (restaura en paralelo
+y comprimido) y con el WAL desde el último respaldo (a lo sumo un día). El margen frente a las 2 horas
+del RTO es amplio, pero el simulacro mensual con datos reales del piloto lo confirmará.
