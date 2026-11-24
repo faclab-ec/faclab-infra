@@ -61,7 +61,8 @@ de WAL en el bucket.
 - **docker-init es el PID 1 del contenedor** (`init: true`). Recoge los procesos que pgBackRest deja
   en segundo plano al archivar. Sin él, PostgreSQL los adopta y, cuando uno termina con error (el
   repositorio no responde), lo toma por un proceso propio caído y reinicia todas las conexiones. Lo
-  encontró el simulacro de S8.3.
+  encontró el simulacro de S8.3. Para pasarle a PostgreSQL la señal de parada, docker-init necesita
+  la capacidad `KILL`; sin ella, PostgreSQL muere sin apagarse limpio.
 - **El archivo de WAL no está en la línea de comandos.** Va en `postgresql.auto.conf`
   (`ALTER SYSTEM`), y lo pone `stack.sh migrate` después de crear el stanza; cambiar `archive_mode`
   reinicia PostgreSQL una vez. Así, una base nueva se inicializa sin archivar (el stanza aún no

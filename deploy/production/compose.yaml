@@ -310,9 +310,11 @@ services:
       - ./postgres/pgbackrest.conf:/etc/pgbackrest/pgbackrest.conf:ro
       - ../../scripts/init-invoicing-db.sh:/docker-entrypoint-initdb.d/init-invoicing-db.sh:ro
     shm_size: 256m
-    # The entrypoint prepares its directories as root and then runs as postgres
+    # The entrypoint prepares its directories as root and then runs as postgres. KILL: docker-init
+    # (root) passes the stop signal to PostgreSQL (the postgres user); without it the signal fails,
+    # docker-init exits and PostgreSQL dies without a clean shutdown
     cap_drop: [ALL]
-    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, KILL]
     mem_limit: ${POSTGRES_MEMORY:-1536m}
     stop_grace_period: 60s
     healthcheck:

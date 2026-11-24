@@ -829,6 +829,10 @@ restore() {
 
   step "Stopping the applications and PostgreSQL"
   VERSIONS="$versions" compose stop "${APP_SERVICES[@]}" postgres
+  # With the container stopped, a postmaster.pid left by a PostgreSQL that died (the server a restore
+  # is for) means nothing, and pgBackRest would refuse to restore over it
+  VERSIONS="$versions" compose run --rm --no-deps -T -u postgres --entrypoint rm postgres \
+    -f /var/lib/postgresql/data/postmaster.pid
 
   step "Restoring PostgreSQL ($target)"
   args=(--delta)
