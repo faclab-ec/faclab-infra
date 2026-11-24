@@ -367,13 +367,19 @@ wal_archiving() {
   timeout="$(env_value POSTGRES_ARCHIVE_TIMEOUT)"
   timeout="${timeout:-60}"
   [[ "$timeout" =~ ^[0-9]+$ ]] || die "POSTGRES_ARCHIVE_TIMEOUT must be a number of seconds"
+  current="$(psql_value postgres "select current_setting('archive_mode') || '|' || current_setting('archive_command') || '|' || setting from pg_settings where name = 'archive_timeout'")"
+  if [ "$current" = "$mode|pgbackrest --stanza=faclab archive-push %p|$timeout" ]; then
+    echo "PostgreSQL: WAL archiving $mode"
+    return 0
+  fi
   psql_value postgres "alter system set archive_command = 'pgbackrest --stanza=faclab archive-push %p'" > /dev/null
   psql_value postgres "alter system set archive_timeout = '$timeout'" > /dev/null
   psql_value postgres "alter system set archive_mode = '$mode'" > /dev/null
-  current="$(psql_value postgres "show archive_mode")"
+  current="${current%%|*}"
   if [ "$current" = "$mode" ]; then
+    # The command and its timeout only need a reload
     psql_value postgres "select pg_reload_conf()" > /dev/null
-    echo "PostgreSQL: WAL archiving $mode"
+    echo "PostgreSQL: WAL archiving $mode, its settings reloaded"
     return 0
   fi
   echo "PostgreSQL: WAL archiving $current -> $mode, restarting it..."
