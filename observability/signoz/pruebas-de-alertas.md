@@ -65,6 +65,8 @@ se provocó.
 | `sin-telemetria-invoicing-worker` | 02:22:11 | nodata | Real (ver la nota de su sección) |
 | `fuerza-bruta` | 03:03:30 | warning | Real (segundo lote de logins fallidos) |
 | `entregas-fallidas` | 03:03:38 | warning | Real (SMTP cerrado, segunda entrega) |
+| `respaldo-fallido` (S8.3, 2026-11-23) | 22:33:26 | warning | Real (almacenamiento externo detenido, incremental de staging) |
+| `wal-sin-archivar` (S8.3, 2026-11-23) | 22:58:30 | critical | Real (ídem, 15 minutos de WAL sin archivar) |
 
 `latencia-pos` también avisó a las 03:21:57, pero ese fue el falso positivo que se describe en su sección.
 
@@ -231,3 +233,37 @@ OpenTelemetry que ya trae el `.venv` del core:
   operación `recepcion`: más de 3 en una hora.
 
 Al dejar de emitirlas, las dos alertas se resuelven.
+
+<a id="respaldos"></a>
+### Respaldos (S8.3)
+
+Se probaron en staging, con faclab-infra 0.2.0-rc.2, cuyo Collector envía al de la Mac y de ahí al
+SigNoz local, a las 22:26 UTC del 2026-11-23:
+
+1. Se detuvo el sustituto de S3 de `deploy/production/drill` (`standin.sh down`): una caída real del
+   almacenamiento externo.
+2. Se corrió el incremental con `systemctl start faclab-backup@incr`. pgBackRest falló a los 121 s
+   (exit 49) y `backups.sh` dejó `incr` como fallido. Con su reporte, `respaldo-fallido` avisó a los 7
+   minutos.
+3. Una carga mínima en la base `postgres` (una fila y `pg_switch_wal()` cada 30 s, durante 25
+   minutos) dio WAL que archivar. `wal-sin-archivar` avisó a las 22:58, después de sus 15 minutos de
+   falla sostenida, por correo y por Telegram.
+4. Al levantar el sustituto (`standin.sh up`), el archivo de WAL se puso al día solo: 15 segmentos
+   en un minuto, ninguno pendiente.
+
+La prueba encontró tres problemas, corregidos antes del simulacro de restauración:
+
+- **PostgreSQL se reiniciaba cada vez que pgBackRest fallaba en segundo plano:** 9 veces en 20
+  minutos. Como PID 1 del contenedor, el postmaster adoptaba el proceso asíncrono de pgBackRest y
+  tomaba su salida con error por la caída de un proceso propio. Ahora `init: true` pone docker-init
+  como PID 1. Reproducido en local: sin init, 1 reinicio en 4 minutos; con init, ninguno.
+- **`respaldo-atrasado` también avisaba, y no debía:** `pgbackrest info` termina con 0 aunque el
+  repositorio no responda, y dice el error en su JSON (`status.code` 99). El reporte lo leía como «no
+  hay respaldos». Ahora solo confía en los códigos 0 y 2, y si no, usa las corridas registradas.
+- **El archivo de WAL ya no va en la línea de comandos** (`stack.sh migrate` lo enciende tras crear el
+  stanza). Lo mostró la prueba local: el servidor temporal con que la imagen inicializa una base nueva
+  no se podía apagar sin un stanza al que archivar.
+
+`respaldo-atrasado` sin datos (`alertOnAbsent`) avisó al crearse la regla, a las 20:46, antes del
+primer reporte del timer, y se resolvió a las 20:54.
+

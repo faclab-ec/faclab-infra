@@ -19,6 +19,13 @@
 #   stack.sh backups                        the backups taken before each deployment
 #   stack.sh restore-predeploy <id> --yes   replace both databases with that backup and deploy the
 #                                           versions that ran then (what was written since is lost)
+#   stack.sh restore <time|latest> --yes [<infra> <core> <invoicing> <web>]
+#                                           point-in-time recovery from the repository outside the
+#                                           server (S8.3, RESPALDOS.md): PostgreSQL as it was at that
+#                                           time ('2026-11-24 15:30:00-05:00') or up to the last WAL
+#                                           archived, then the versions noted in the backup used (or
+#                                           those given) deployed over it. On a clean server too
+#   stack.sh restore-objects --yes          copy the archive of the object storage back into Garage
 #   stack.sh authorize-ci "<public key>"    let that SSH key run only remote.sh (the CI's key)
 #   stack.sh migrate                        roles, databases and migrations of the deployed versions
 #   stack.sh up                             start or update every service and wait until healthy
@@ -52,7 +59,7 @@ APP_SERVICES=(invoicing-api invoicing-worker core-api core-worker web)
 # Long-running: what must stay up after a deployment
 RUNNING_SERVICES=(postgres kafka object-storage docker-socket-proxy collector caddy "${APP_SERVICES[@]}")
 # Service, the version variable of its image
-VERSIONED=(caddy:INFRA invoicing-api:INVOICING invoicing-worker:INVOICING core-api:CORE core-worker:CORE web:WEB)
+VERSIONED=(caddy:INFRA postgres:INFRA invoicing-api:INVOICING invoicing-worker:INVOICING core-api:CORE core-worker:CORE web:WEB)
 
 die() {
   echo "stack.sh: $*" >&2
@@ -149,6 +156,7 @@ image_name() {
   registry="$(env_value IMAGE_REGISTRY)"
   case "$1" in
     INFRA) printf '%s/faclab-caddy' "${registry:-ghcr.io/faclab-ec}" ;;
+    POSTGRES) printf '%s/faclab-postgres' "${registry:-ghcr.io/faclab-ec}" ;;
     CORE) printf '%s/faclab-api' "${registry:-ghcr.io/faclab-ec}" ;;
     INVOICING) printf '%s/faclab-invoicing' "${registry:-ghcr.io/faclab-ec}" ;;
     WEB) printf '%s/faclab-web' "${registry:-ghcr.io/faclab-ec}" ;;
@@ -168,9 +176,13 @@ pin_image() {
 # write_versions <file> <infra> <core> <invoicing> <web>: what compose reads for those versions
 write_versions() {
   local file="$1" infra="$2" core="$3" invoicing="$4" web="$5" caddy_image core_image
-  local invoicing_image web_image
+  local invoicing_image web_image postgres_image=""
   # Assignments, not printf arguments: a failed pull has to stop the script
   caddy_image="$(pin_image "$(image_name INFRA)" "$infra")"
+  # PostgreSQL with pgBackRest since the stack of S8.3; an older one runs the official image
+  if grep -q 'faclab-postgres' "$HERE/compose.yaml"; then
+    postgres_image="$(pin_image "$(image_name POSTGRES)" "$infra")"
+  fi
   core_image="$(pin_image "$(image_name CORE)" "$core")"
   invoicing_image="$(pin_image "$(image_name INVOICING)" "$invoicing")"
   web_image="$(pin_image "$(image_name WEB)" "$web")"
@@ -180,6 +192,7 @@ write_versions() {
       "$infra" "$core" "$invoicing" "$web"
     printf 'CADDY_IMAGE=%s\nCORE_IMAGE=%s\nINVOICING_IMAGE=%s\nWEB_IMAGE=%s\n' \
       "$caddy_image" "$core_image" "$invoicing_image" "$web_image"
+    [ -z "$postgres_image" ] || printf 'POSTGRES_IMAGE=%s\n' "$postgres_image"
   } > "$file.tmp"
   mv "$file.tmp" "$file"
 }
@@ -190,7 +203,8 @@ prune_images() {
   local keep=() file name id kept
   for file in "$STATE/current.env" "$STATE/previous.env"; do
     [ -f "$file" ] || continue
-    for name in CADDY_IMAGE CORE_IMAGE INVOICING_IMAGE WEB_IMAGE; do
+    for name in CADDY_IMAGE POSTGRES_IMAGE CORE_IMAGE INVOICING_IMAGE WEB_IMAGE; do
+      [ -n "$(file_value "$file" "$name")" ] || continue
       id="$(docker image inspect --format '{{.Id}}' "$(file_value "$file" "$name")" 2> /dev/null || true)"
       [ -n "$id" ] && keep+=("$id")
     done
@@ -307,6 +321,80 @@ migrate() {
   compose run --rm --no-deps core-migrate
   echo "faclab-invoicing: migrations..."
   compose run --rm --no-deps invoicing-migrate
+
+  # Idempotent. A repository out of reach doesn't fail the deployment: the WAL waits in pg_wal and
+  # the alerts wal-sin-archivar and respaldo-atrasado say so (RESPALDOS.md)
+  if backups_on; then
+    echo "pgBackRest: stanza in the repository..."
+    if backup_stanza; then
+      wal_archiving on
+    else
+      echo "stack.sh: WARNING: pgBackRest couldn't create or check its stanza, so WAL isn't archived yet: deploy again once the repository answers (backups.sh status)" >&2
+    fi
+  else
+    wal_archiving off
+  fi
+}
+
+#
+# Backups (S8.3, RESPALDOS.md)
+#
+
+backups_on() {
+  [ "$(env_value BACKUPS)" != off ]
+}
+
+backup_stanza() {
+  local attempt output=""
+  for attempt in $(seq 1 10); do
+    if output="$(compose exec -T -u postgres postgres pgbackrest --stanza=faclab stanza-create 2>&1)"; then
+      echo "pgBackRest: the stanza faclab is ready"
+      return 0
+    fi
+    # The archiving of the first segments may hold the stanza's lock for a moment
+    grep -q 'unable to acquire lock' <<< "$output" || break
+    [ "$attempt" = 10 ] || sleep 3
+  done
+  printf '%s\n' "$output" >&2
+  return 1
+}
+
+# wal_archiving <on|off>: PostgreSQL's archiving, in postgresql.auto.conf (ALTER SYSTEM). archive_mode
+# needs a restart, only when it changes; the command and its timeout, a reload. archive_timeout is
+# the RPO: a segment leaves at most that long after a write, even with little traffic
+wal_archiving() {
+  local mode="$1" timeout current
+  timeout="$(env_value POSTGRES_ARCHIVE_TIMEOUT)"
+  timeout="${timeout:-60}"
+  [[ "$timeout" =~ ^[0-9]+$ ]] || die "POSTGRES_ARCHIVE_TIMEOUT must be a number of seconds"
+  current="$(psql_value postgres "select current_setting('archive_mode') || '|' || current_setting('archive_command') || '|' || setting from pg_settings where name = 'archive_timeout'")"
+  if [ "$current" = "$mode|pgbackrest --stanza=faclab archive-push %p|$timeout" ]; then
+    echo "PostgreSQL: WAL archiving $mode"
+    return 0
+  fi
+  psql_value postgres "alter system set archive_command = 'pgbackrest --stanza=faclab archive-push %p'" > /dev/null
+  psql_value postgres "alter system set archive_timeout = '$timeout'" > /dev/null
+  psql_value postgres "alter system set archive_mode = '$mode'" > /dev/null
+  current="${current%%|*}"
+  if [ "$current" = "$mode" ]; then
+    # The command and its timeout only need a reload
+    psql_value postgres "select pg_reload_conf()" > /dev/null
+    echo "PostgreSQL: WAL archiving $mode, its settings reloaded"
+    return 0
+  fi
+  echo "PostgreSQL: WAL archiving $current -> $mode, restarting it..."
+  compose restart postgres
+  compose up -d --wait postgres
+}
+
+# The timers of scripts/backups.sh, installed or removed as BACKUPS says, after a deployment
+backup_timers() {
+  if backups_on; then
+    "$HERE/scripts/backups.sh" install-timers ||
+      echo "stack.sh: WARNING: the backup timers couldn't be installed: run scripts/backups.sh install-timers" >&2
+  elif compgen -G '/etc/systemd/system/faclab-backup@*' > /dev/null; then
+    "$HERE/scripts/backups.sh" remove-timers || true
+  fi
 }
 
 # The databases before a deployment, in $BACKUPS/<id> (root, 0600), with the versions that ran then.
@@ -370,17 +458,26 @@ up_group() {
 
 # bring_up <versions file>: the services in order, each group checked before the next
 bring_up() {
-  local VERSIONS="$1"
+  local VERSIONS="$1" recreate=() started
   step "infra (faclab-infra $(file_value "$1" INFRA_VERSION))"
+  : "${CHANGE_STARTED:=$(date -u +%s)}"
   up_group "${INFRA_SERVICES[@]}"
   answers http://collector:13133/
+  # PostgreSQL started during this change (a new image with faclab-infra, or archiving turned on):
+  # the applications that kept running hold pooled connections to the server that stopped, and each
+  # would fail one request. They start again with new ones
+  started="$(docker inspect --format '{{.State.StartedAt}}' "$(compose ps -q postgres)")"
+  if [ "$(date -u -d "$started" +%s)" -ge "$CHANGE_STARTED" ]; then
+    echo "PostgreSQL restarted during this change: the applications start again too"
+    recreate=(--force-recreate)
+  fi
 
   step "faclab-invoicing $(file_value "$1" INVOICING_VERSION)"
-  up_group invoicing-api invoicing-worker
+  up_group "${recreate[@]}" invoicing-api invoicing-worker
   answers http://invoicing-api:3173/health
 
   step "faclab-core $(file_value "$1" CORE_VERSION)"
-  up_group core-api core-worker
+  up_group "${recreate[@]}" core-api core-worker
   answers http://core-api:8080/health/ready
 
   step "faclab-web $(file_value "$1" WEB_VERSION)"
@@ -465,6 +562,8 @@ at_tag() {
 # The schema back to what the target knows, the migrations, the services and the checks
 change_to() {
   local target="$1"
+  # bring_up compares PostgreSQL's start with it
+  CHANGE_STARTED="$(date -u +%s)"
   if [ -f "$STATE/current.env" ]; then
     schema_down_to "$target" "$STATE/current.env"
   fi
@@ -516,6 +615,8 @@ deploy() {
     record "${FACLAB_DEPLOY_KIND:-deployed}" "$(versions_of "$current") (backup $id)"
     step "Pruning images of older versions"
     prune_images
+    step "Backups"
+    backup_timers
     printf '\nDeployed: %s (%ss)\n' "$(versions_of "$current")" "$SECONDS"
     return 0
   fi
@@ -654,6 +755,148 @@ restore_predeploy() {
     "$(file_value "$saved" INVOICING_VERSION)" "$(file_value "$saved" WEB_VERSION)"
 }
 
+# The versions noted in the backup a restore to <target> starts from (pgBackRest takes the newest
+# one that ended before it): "infra core invoicing web", empty fields when it has no notes. Asked
+# with the postgres image of what runs, or of versions/<environment>.env on a clean server
+restore_versions() {
+  local target="$1" versions="$STATE/current.env" info epoch infra
+  if [ ! -f "$versions" ]; then
+    versions="$HERE/versions/$(environment).env"
+  fi
+  if [ ! -f "$versions" ]; then
+    # Only its PostgreSQL image reads the repository: the faclab-infra tag checked out says which
+    infra="$(repo_git describe --tags --exact-match HEAD 2> /dev/null)" ||
+      die "nothing says which faclab-infra to read the repository with: check out a tag (git checkout vX.Y.Z) or pass the four versions"
+    versions="$(mktemp)"
+    printf 'INFRA_VERSION=%s\nCORE_VERSION=%s\nINVOICING_VERSION=%s\nWEB_VERSION=%s\n' \
+      "${infra#v}" "${infra#v}" "${infra#v}" "${infra#v}" > "$versions"
+  fi
+  info="$(VERSIONS="$versions" compose run --rm --no-deps -T -u postgres postgres \
+    pgbackrest --stanza=faclab info --output=json)" ||
+    die "pgBackRest couldn't read the repository (its endpoint, bucket and keys are in env/ and secrets.env)"
+  # It answers 0 even when the repository doesn't: the status of its JSON says it
+  if ! jq -e '.[0].status.code == 0' <<< "$info" > /dev/null; then
+    jq -r '"pgBackRest: " + (.[0].status.message // "?") + ([.[0].repo[]?.status.message] | map("; " + .) | join(""))' <<< "$info" >&2
+    die "the repository has no backup to restore from"
+  fi
+  if [ "$target" = latest ]; then
+    epoch=99999999999
+  else
+    epoch="$(date -d "$target" +%s)" || die "'$target' isn't a time: '2026-11-24 15:30:00-05:00'"
+  fi
+  jq -r --argjson target "$epoch" '
+    [.[0].backup[]? | select(.timestamp.stop <= $target)] | last // {}
+    | "Backup \(.label // "none") of \(.timestamp.stop // 0 | todate)" as $which
+    | (.annotation // {}) | "\(.infra // "") \(.core // "") \(.invoicing // "") \(.web // "")\t\($which)"' <<< "$info"
+}
+
+# Waits until PostgreSQL replayed the WAL up to the target and promoted itself (RESTORE_TIMEOUT)
+wait_recovery() {
+  local waited=0 timeout="${RESTORE_TIMEOUT:-7200}" state
+  while true; do
+    state="$(psql_value postgres "select pg_is_in_recovery() || ' ' || coalesce(pg_last_xact_replay_timestamp()::text, '-')" 2> /dev/null || true)"
+    if [ "${state%% *}" = false ]; then
+      echo "PostgreSQL promoted after ${waited}s"
+      return 0
+    fi
+    [ "$waited" -lt "$timeout" ] || die "PostgreSQL still recovering after ${timeout}s (stack.sh logs postgres)"
+    if [ $((waited % 60)) = 0 ]; then
+      echo "  recovering: last transaction replayed ${state#* }"
+    fi
+    sleep 5
+    waited=$((waited + 5))
+  done
+}
+
+# Point-in-time recovery (S8.3, RESPALDOS.md): PostgreSQL from the repository outside the server, as
+# it was at <target> or up to the last WAL archived (latest), and the versions that ran then
+# deployed over it. On a clean server (after install-secrets) the database is created from the
+# backup; on this one, pgBackRest rewrites only what differs (--delta). What was written after the
+# target is lost
+restore() {
+  local target="${1:-}" infra core invoicing web which versions revision applied known args
+  if [ -z "$target" ] || [ "${2:-}" != --yes ]; then
+    die "usage: stack.sh restore <'YYYY-MM-DD HH:MM:SS-05:00' | latest> --yes [<infra> <core> <invoicing> <web>]. It replaces both databases: what was written after that time is lost"
+  fi
+  shift 2
+  take_lock
+  if [ $# = 4 ]; then
+    for version in "$@"; do valid_version "$version"; done
+    infra="$1" core="$2" invoicing="$3" web="$4"
+  elif [ $# = 0 ]; then
+    IFS=$'\t' read -r versions which <<< "$(restore_versions "$target")"
+    read -r infra core invoicing web <<< "$versions"
+    [ -n "$web" ] ||
+      die "$which has no versions noted: pass them (stack.sh restore '$target' --yes <infra> <core> <invoicing> <web>)"
+    echo "$which: infra $infra, core $core, invoicing $invoicing, web $web"
+  else
+    die "usage: stack.sh restore <time|latest> --yes [<infra> <core> <invoicing> <web>]"
+  fi
+  # The stack of that faclab-infra version, as deploy does
+  if ! at_tag "$infra"; then
+    checkout_infra "$infra"
+    exec "$SCRIPT" restore "$target" --yes "$infra" "$core" "$invoicing" "$web"
+  fi
+  install -d -m 0700 "$STATE"
+  versions="$STATE/restore.env"
+
+  step "Images"
+  write_versions "$versions" "$infra" "$core" "$invoicing" "$web"
+  VERSIONS="$versions" compose pull --quiet --ignore-buildable
+
+  step "Stopping the applications and PostgreSQL"
+  VERSIONS="$versions" compose stop "${APP_SERVICES[@]}" postgres
+  # With the container stopped, a postmaster.pid left by a PostgreSQL that died (the server a restore
+  # is for) means nothing, and pgBackRest would refuse to restore over it
+  VERSIONS="$versions" compose run --rm --no-deps -T -u postgres --entrypoint rm postgres \
+    -f /var/lib/postgresql/data/postmaster.pid
+
+  step "Restoring PostgreSQL ($target)"
+  args=(--delta)
+  [ "$target" = latest ] || args+=(--type=time "--target=$target" --target-action=promote)
+  # A server that only restores (a drill) must not archive into the repository it comes from: the
+  # restored postgresql.auto.conf would keep archiving on
+  backups_on || args+=(--archive-mode=off)
+  VERSIONS="$versions" compose run --rm --no-deps -T -u postgres postgres \
+    pgbackrest --stanza=faclab restore "${args[@]}"
+
+  step "Replaying the WAL"
+  VERSIONS="$versions" compose up -d --no-deps postgres
+  VERSIONS="$versions" wait_recovery
+
+  # The images must know the schema the databases came back with
+  revision="$(VERSIONS="$versions" core_revision)"
+  if [ -n "$revision" ] && ! core_knows "$versions" "$revision"; then
+    die "core $core doesn't know revision $revision of the restored database: the applications stay stopped. Restore again with the versions that ran at $target"
+  fi
+  applied="$(VERSIONS="$versions" invoicing_applied)"
+  known="$(invoicing_migrations "$versions")"
+  if [ -n "$applied" ] && grep -qvxF -f <(printf '%s\n' "$known") <<< "$applied"; then
+    die "invoicing $invoicing doesn't know every migration of the restored database: the applications stay stopped. Restore again with the versions that ran at $target"
+  fi
+  record restored "PostgreSQL at $target (pgBackRest)"
+
+  export FACLAB_DEPLOY_KIND=restore
+  deploy "$infra" "$core" "$invoicing" "$web"
+  # A new timeline begins: a full backup of it, in the background
+  if backups_on; then
+    systemctl start --no-block faclab-backup@full.service &&
+      echo "A full backup of the restored databases started (journalctl -u faclab-backup@full)"
+  fi
+  echo "Next: stack.sh restore-objects --yes, and the checks of RESPALDOS.md (sequences of the SRI)"
+}
+
+# The archive of the object storage (authorized XML, RIDE, logos) back into Garage: the latest
+# version of each object, over what has the same key
+restore_objects() {
+  [ "${1:-}" = --yes ] ||
+    die "usage: stack.sh restore-objects --yes (it writes the archive's objects into Garage, over those with the same key)"
+  compose up -d --wait --no-deps object-storage
+  step "Copying the archive into Garage"
+  compose run --rm --no-deps objects-backup restore
+  compose run --rm --no-deps objects-backup count
+}
+
 authorize_ci() {
   local key="${1:-}" type blob owner home file tmp
   read -r type blob _ <<< "$key"
@@ -730,7 +973,7 @@ status() {
 main() {
   local command="${1:-}"
   [ -n "$command" ] || {
-    sed -n '2,30p' "$SCRIPT"
+    sed -n '2,36p' "$SCRIPT"
     exit 1
   }
   shift
@@ -744,6 +987,8 @@ main() {
     deployments) deployments ;;
     backups) list_backups ;;
     restore-predeploy) restore_predeploy "$@" ;;
+    restore) restore "$@" ;;
+    restore-objects) restore_objects "$@" ;;
     authorize-ci) authorize_ci "$@" ;;
     migrate) migrate ;;
     up) up ;;

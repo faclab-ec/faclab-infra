@@ -26,6 +26,7 @@ ajusta su archivo; no se silencia en la interfaz sin dejar rastro.
 | [Ausencia de telemetría](sin-telemetria.md) | `sin-telemetria-core`, `sin-telemetria-core-worker`, `sin-telemetria-invoicing`, `sin-telemetria-invoicing-worker` | Advertencia |
 | [Fuerza bruta en el login](fuerza-bruta.md) | `fuerza-bruta` | Advertencia |
 | [Entregas de facturas fallidas](entregas-fallidas.md) | `entregas-fallidas` | Advertencia |
+| [Respaldos](respaldos.md) | `respaldo-fallido`, `respaldo-atrasado`, `wal-sin-archivar` | Advertencia (fallido, atrasado), crítica (WAL sin archivar) |
 
 ## Severidades y canales
 

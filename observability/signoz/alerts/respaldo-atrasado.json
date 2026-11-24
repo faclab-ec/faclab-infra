@@ -1,0 +1,101 @@
+{
+  "alert": "Respaldo atrasado",
+  "alertType": "METRIC_BASED_ALERT",
+  "description": "Un respaldo no se completó a tiempo: el incremental en 26 h, el completo en 8 días o la copia de comprobantes en 1 h (faclab.backup.overdue, por faclab.backup.job); o el reporte de los respaldos no llega en 30 minutos.",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "source": "",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "faclab.backup.overdue",
+                "temporality": "",
+                "timeAggregation": "latest",
+                "spaceAggregation": "max"
+              }
+            ],
+            "disabled": false,
+            "filter": {
+              "expression": ""
+            },
+            "groupBy": [
+              {
+                "name": "faclab.backup.job",
+                "fieldContext": "attribute",
+                "fieldDataType": "string"
+              },
+              {
+                "name": "deployment.environment.name",
+                "fieldContext": "resource",
+                "fieldDataType": "string"
+              }
+            ],
+            "order": [],
+            "having": {
+              "expression": ""
+            },
+            "functions": [],
+            "legend": ""
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "op": "above",
+          "matchType": "last",
+          "target": 0,
+          "channels": [
+            "faclab-correo"
+          ]
+        }
+      ]
+    },
+    "alertOnAbsent": true,
+    "absentFor": 30
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "15m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "groupBy": [
+      "faclab.backup.job"
+    ],
+    "usePolicy": false,
+    "renotify": {
+      "enabled": true,
+      "interval": "4h",
+      "alertStates": [
+        "firing",
+        "nodata"
+      ]
+    }
+  },
+  "labels": {
+    "faclab_rule": "respaldo-atrasado"
+  },
+  "annotations": {
+    "summary": "Respaldo atrasado",
+    "description": "Un respaldo no se completó a tiempo: el incremental en 26 h, el completo en 8 días o la copia de comprobantes en 1 h (faclab.backup.overdue, por faclab.backup.job); o el reporte de los respaldos no llega en 30 minutos. Valor: {{$value}} (umbral {{$threshold}}). Runbook: https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/respaldos.md",
+    "runbook_url": "https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/respaldos.md"
+  },
+  "disabled": false
+}

@@ -6,11 +6,15 @@
 # development default.
 
 receivers:
-  # Services (faclab-core API and worker, faclab-invoicing API and worker): OTLP gRPC
+  # Services (faclab-core API and worker, faclab-invoicing API and worker): OTLP gRPC. Internal tasks
+  # without an OTel SDK (the backups of deploy/production, S8.3) send OTLP/HTTP JSON to :4319, which
+  # no route of Caddy or Vite reaches and no port publishes
   otlp:
     protocols:
       grpc:
         endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4319
 
   # The browser (faclab-web), through the /otlp route of its own origin (Vite locally, Caddy in
   # production): OTLP/HTTP with a size limit. Its pipelines only take traces and metrics, and only of

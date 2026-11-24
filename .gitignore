@@ -10,6 +10,8 @@ __pycache__/
 
 # The production environment's settings live on its server, copied from env/production.env.example
 deploy/production/env/production.env
+# A server that only restores, for a drill (RESPALDOS.md): a copy of its environment with BACKUPS=off
+deploy/production/env/drill.env
 
 # Secrets of the production stack (deploy/production): they live encrypted outside the repository
 secrets.env

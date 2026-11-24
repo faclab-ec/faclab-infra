@@ -1,0 +1,15 @@
+# Faclab backups (S8.3, deploy/production/RESPALDOS.md): complete copy of the object storage, daily
+# at 03:00 in Ecuador. scripts/backups.sh install-timers installs it. The time zone of the calendar
+# is explicit: the server's own doesn't matter
+[Unit]
+Description=Faclab backup: complete copy of the object storage
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 America/Guayaquil
+# A run missed while the server was off happens when it starts
+Persistent=true
+RandomizedDelaySec=10min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

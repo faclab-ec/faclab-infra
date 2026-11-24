@@ -1,0 +1,15 @@
+# Faclab backups (S8.3, deploy/production/RESPALDOS.md): copy of the objects written in the last 24
+# hours, every 5 minutes. scripts/backups.sh install-timers installs it. The time zone of the
+# calendar is explicit: the server's own doesn't matter
+[Unit]
+Description=Faclab backup: copy of the objects written in the last 24 hours
+
+[Timer]
+OnCalendar=*:0/5
+# Frequent: a missed run isn't repeated, the next one comes soon
+Persistent=false
+RandomizedDelaySec=30s
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

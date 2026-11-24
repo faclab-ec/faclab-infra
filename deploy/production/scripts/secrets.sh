@@ -9,7 +9,9 @@
 #   secrets.sh names <environment>              list the variables, without their values
 #   secrets.sh set <environment> <name> [kind]  replace one secret, without an editor: a new value
 #                                               of that kind (see generate) or, without a kind,
-#                                               the value read from stdin
+#                                               the value read from stdin. A variable of
+#                                               secrets.env.example missing from an older file
+#                                               is added
 #   secrets.sh push <environment> <ssh target>  copy them decrypted to ~/.faclab-incoming on the
 #                                               server, over SSH and without touching the local disk;
 #                                               then: sudo stack.sh install-secrets <environment>
@@ -24,6 +26,13 @@ set -euo pipefail
 
 # What the server receives: env goes to /etc/faclab/secrets.env, files to /etc/faclab/secrets
 FILES=(postgres_password jwt_private_key.pem secret_encryption_keys)
+# The variables of secrets.env.example: set adds one of these to a file created before it existed
+ENV_NAMES=(CORE_DB_OWNER_PASSWORD CORE_DB_APP_PASSWORD CORE_DB_WORKER_PASSWORD DB_MONITOR_PASSWORD
+  INVOICING_DB_PASSWORD CERTIFICATE_PASSWORD_KEY OBJECT_STORAGE_ACCESS_KEY_ID
+  OBJECT_STORAGE_SECRET_ACCESS_KEY GARAGE_RPC_SECRET GARAGE_ADMIN_TOKEN SMTP_USER SMTP_PASSWORD
+  BACKUP_PG_ACCESS_KEY_ID BACKUP_PG_SECRET_ACCESS_KEY BACKUP_PG_CIPHER_PASS
+  BACKUP_OBJECTS_ACCESS_KEY_ID BACKUP_OBJECTS_SECRET_ACCESS_KEY BACKUP_OBJECTS_CRYPT_PASSWORD
+  BACKUP_OBJECTS_CRYPT_SALT)
 
 die() {
   echo "secrets.sh: $*" >&2
@@ -107,6 +116,13 @@ env:
   GARAGE_ADMIN_TOKEN: '$(generate base64)'
   SMTP_USER: ''
   SMTP_PASSWORD: ''
+  BACKUP_PG_ACCESS_KEY_ID: ''
+  BACKUP_PG_SECRET_ACCESS_KEY: ''
+  BACKUP_PG_CIPHER_PASS: '$(generate base64)'
+  BACKUP_OBJECTS_ACCESS_KEY_ID: ''
+  BACKUP_OBJECTS_SECRET_ACCESS_KEY: ''
+  BACKUP_OBJECTS_CRYPT_PASSWORD: '$(generate hex)'
+  BACKUP_OBJECTS_CRYPT_SALT: '$(generate hex)'
 files:
   postgres_password: '$(generate hex)'
   jwt_private_key.pem: |
@@ -118,7 +134,9 @@ YAML
   (cd "$dir" && printf '%s\n' "$yaml" | sops encrypt --filename-override "$file" \
     --input-type yaml --output-type yaml /dev/stdin > "$file.tmp")
   mv "$file.tmp" "$file"
-  echo "Created $file. SMTP_USER and SMTP_PASSWORD are empty: fill them with secrets.sh edit $environment."
+  echo "Created $file. Empty, to fill with secrets.sh set $environment <name> (the value from stdin):"
+  echo "  SMTP_USER, SMTP_PASSWORD (the mail provider) and BACKUP_PG_* and BACKUP_OBJECTS_* keys (the"
+  echo "  storage outside the server, RESPALDOS.md)"
 }
 
 edit() {
@@ -136,8 +154,12 @@ set_value() {
     postgres_password | jwt_private_key.pem | secret_encryption_keys) index="[\"files\"][\"$name\"]" ;;
     *) index="[\"env\"][\"$name\"]" ;;
   esac
-  # Only names that exist: a typo would add a secret nobody reads
-  sops decrypt --extract "$index" "$file" > /dev/null 2>&1 || die "$name isn't a secret of $environment (secrets.sh names $environment)"
+  # Only names that exist, or that secrets.env.example added since: a typo would add a secret
+  # nobody reads
+  if ! sops decrypt --extract "$index" "$file" > /dev/null 2>&1 &&
+    ! printf '%s\n' "${ENV_NAMES[@]}" | grep -qxF "$name"; then
+    die "$name isn't a secret of $environment (secrets.sh names $environment)"
+  fi
   if [ -n "$kind" ]; then
     value="$(generate "$kind")"
   else
@@ -149,7 +171,7 @@ set_value() {
   # sops reads it from stdin as JSON: never in a command line
   printf '%s' "$value" | python3 -c 'import json, sys; sys.stdout.write(json.dumps(sys.stdin.read()))' |
     (cd "$(secrets_dir)" && sops set --value-stdin "$file" "$index")
-  echo "$name of $environment replaced. Next: secrets.sh push, then stack.sh install-secrets on the server."
+  echo "$name of $environment saved. Next: secrets.sh push, then stack.sh install-secrets on the server."
 }
 
 names() {

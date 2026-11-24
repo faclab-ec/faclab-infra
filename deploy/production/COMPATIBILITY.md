@@ -70,4 +70,5 @@ Lo que la matriz no cubre:
 | invoicing | 0.1.0 | invoices v1, credit_notes.results v1 | sales.confirmed v1–v3, credit_notes.requested v1–v2 | core ≥ 0.1.0 |
 | web | 0.1.0 | — | — | core ≥ 0.1.0, invoicing ≥ 0.1.0 |
 | infra | 0.1.0 | — | — | core ≥ 0.1.0, invoicing ≥ 0.1.0, web ≥ 0.1.0 |
+| infra | 0.2.0 | — | — | core ≥ 0.1.0, invoicing ≥ 0.1.0, web ≥ 0.1.0 |
 <!-- matrix:end -->

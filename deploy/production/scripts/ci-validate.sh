@@ -7,6 +7,8 @@
 #   files; its images, the published ones of each version (S8.2);
 # - both versions files against the compatibility matrix (COMPATIBILITY.md, compat.py);
 # - the edge Caddy: its image and its Caddyfile in both TLS modes, formatted;
+# - PostgreSQL with pgBackRest (S8.3): its image and that pgbackrest.conf reads without warnings; and
+#   that the production example keeps the TLS verification of the backups' storage;
 # - the Collector with the production overlay, and that the overlay's metrics pipeline is the base
 #   one without postgresql/invoicing;
 # - that no secret file is versioned.
@@ -56,6 +58,7 @@ for environment in staging production; do
   for expected in "OTEL_OTLP_ENDPOINT: http://collector:4317" \
     "OTEL_EXPORTER_OTLP_ENDPOINT: http://collector:4317" \
     "image: ghcr.io/faclab-ec/faclab-caddy:$(version "$environment" INFRA_VERSION)" \
+    "image: ghcr.io/faclab-ec/faclab-postgres:$(version "$environment" INFRA_VERSION)" \
     "image: ghcr.io/faclab-ec/faclab-api:$(version "$environment" CORE_VERSION)" \
     "image: ghcr.io/faclab-ec/faclab-invoicing:$(version "$environment" INVOICING_VERSION)" \
     "image: ghcr.io/faclab-ec/faclab-web:$(version "$environment" WEB_VERSION)"; do
@@ -70,6 +73,11 @@ for environment in staging production; do
   fi
   echo "ok: $environment (published images of its versions, the Collector's endpoint)"
 done
+
+# The S3 stand-in of staging and the drills (S8.3), with placeholder keys
+STANDIN_DIR="$PLACEHOLDERS" STANDIN_ROOT_ACCESS_KEY=placeholder STANDIN_ROOT_SECRET_KEY=placeholder \
+  docker compose -f "$DEPLOY/drill/compose.yaml" config -q
+echo "ok: drill/compose.yaml"
 
 echo "== Versions against the compatibility matrix"
 for environment in staging production; do
@@ -93,6 +101,26 @@ compose "$STAGING" run --rm --no-deps caddy caddy fmt --diff /etc/caddy/Caddyfil
     echo "caddy/Caddyfile isn't formatted: caddy fmt --overwrite" >&2
     exit 1
   }
+
+echo "== PostgreSQL with pgBackRest"
+compose "$STAGING" build -q postgres
+compose "$STAGING" run --rm --no-deps -T -u postgres postgres pgbackrest version
+# pgBackRest warns about an option it doesn't know in pgbackrest.conf. A repository on the
+# container's disk stands for the bucket: the configuration is read, nothing leaves
+output="$(compose "$STAGING" run --rm --no-deps -T -u postgres -e PGBACKREST_REPO1_TYPE=posix \
+  -e PGBACKREST_REPO1_PATH=/tmp/repository postgres pgbackrest --stanza=faclab info 2>&1)"
+if grep -qE 'WARN|ERROR' <<< "$output"; then
+  printf '%s\n' "$output" >&2
+  echo "postgres/pgbackrest.conf: pgBackRest doesn't read it cleanly" >&2
+  exit 1
+fi
+echo "ok: pgbackrest.conf"
+# Only a stand-in with a self-signed certificate turns it off (staging, RESPALDOS.md)
+if grep -q '^BACKUP_S3_VERIFY_TLS=n' "$DEPLOY/env/production.env.example"; then
+  echo "env/production.env.example: the backups' storage keeps its TLS verification" >&2
+  exit 1
+fi
+echo "ok: production verifies the TLS of the backups' storage"
 
 echo "== Collector"
 compose "$STAGING" run --rm --no-deps collector validate \

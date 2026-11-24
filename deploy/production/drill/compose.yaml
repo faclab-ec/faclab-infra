@@ -1,0 +1,44 @@
+# A stand-in for the S3-compatible service outside the server where the backups go (S8.3,
+# RESPALDOS.md), for staging and the restore drill until the first VPS brings the real provider. Run
+# it through standin.sh on the machine that hosts the staging VMs (the Mac of OrbStack), never on a
+# server of the stack: the backups would stay next to what they protect.
+#
+# versitygw (Apache 2.0) over a directory: S3 with versioning, Object Lock in compliance mode, users
+# and bucket policies, which is what the real provider has to offer. MinIO stopped publishing images.
+# TLS with a self-signed certificate (pgBackRest only speaks HTTPS to S3).
+name: faclab-drill
+
+services:
+  s3:
+    image: versity/versitygw:${STANDIN_VERSION:-v1.10.0}
+    command:
+      - --cert
+      - /tls/cert.pem
+      - --key
+      - /tls/key.pem
+      - --iam-dir
+      - /iam
+      # The admin API (users, bucket owners) on the S3 port, under /admin, with the root keys
+      - --admin-path-prefix
+      - /admin
+      - --quiet
+      - posix
+      - --versioning-dir
+      - /versions
+      - /data
+    environment:
+      ROOT_ACCESS_KEY_ID: ${STANDIN_ROOT_ACCESS_KEY:?}
+      ROOT_SECRET_ACCESS_KEY: ${STANDIN_ROOT_SECRET_KEY:?}
+    ports:
+      - "${STANDIN_PORT:-9000}:7070"
+    volumes:
+      - ${STANDIN_DIR:?}/tls:/tls:ro
+      - data:/data
+      - versions:/versions
+      - iam:/iam
+    restart: unless-stopped
+
+volumes:
+  data:
+  versions:
+  iam:

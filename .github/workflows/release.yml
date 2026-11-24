@@ -1,9 +1,10 @@
 name: Release
 
-# A tag vX.Y.Z of faclab-infra publishes the edge Caddy (deploy/production/caddy: Caddy plus
-# caddy-ratelimit) to GitHub Container Registry, for amd64 and arm64, as faclab-caddy:X.Y.Z (S8.2):
-# the stack of version X.Y.Z (compose.yaml, INFRA_VERSION) runs that image, so servers don't build
-# it. A final version comes from master and needs its CHANGELOG.md section (scripts/release.sh); a
+# A tag vX.Y.Z of faclab-infra publishes its two images to GitHub Container Registry, for amd64 and
+# arm64: the edge Caddy (deploy/production/caddy: Caddy plus caddy-ratelimit) as faclab-caddy:X.Y.Z
+# (S8.2) and PostgreSQL with pgBackRest (deploy/production/postgres) as faclab-postgres:X.Y.Z (S8.3).
+# The stack of version X.Y.Z (compose.yaml, INFRA_VERSION) runs those images, so servers don't build
+# them. A final version comes from master and needs its CHANGELOG.md section (scripts/release.sh); a
 # pre-release (vX.Y.Z-rc.1) may come from any pushed commit and is only for staging.
 # README.md, "Versiones y publicación"
 on:
@@ -18,7 +19,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  IMAGE: ghcr.io/faclab-ec/faclab-caddy
+  REGISTRY: ghcr.io/faclab-ec
 
 jobs:
   verify:
@@ -66,20 +67,28 @@ jobs:
   # One native runner per platform (the arm64 ones are free for public repositories): no
   # emulation. Each pushes its image by digest; publish joins them under the version
   build:
-    name: build (${{ matrix.arch }})
+    name: build (${{ matrix.image }}, ${{ matrix.arch }})
     needs: verify
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     permissions:
       contents: read
       packages: write
+    env:
+      IMAGE: ghcr.io/faclab-ec/${{ matrix.image }}
     strategy:
       matrix:
+        image: [faclab-caddy, faclab-postgres]
+        arch: [amd64, arm64]
         include:
           - arch: amd64
             runner: ubuntu-24.04
           - arch: arm64
             runner: ubuntu-24.04-arm
+          - image: faclab-caddy
+            context: deploy/production/caddy
+          - image: faclab-postgres
+            context: deploy/production/postgres
     steps:
       - uses: actions/checkout@v7
 
@@ -104,7 +113,7 @@ jobs:
         id: build
         uses: docker/build-push-action@v7
         with:
-          context: deploy/production/caddy
+          context: ${{ matrix.context }}
           platforms: linux/${{ matrix.arch }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
@@ -118,7 +127,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: digest-${{ matrix.arch }}
+          name: digest-${{ matrix.image }}-${{ matrix.arch }}
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
           retention-days: 1
@@ -136,11 +145,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # One folder per image and platform: digests/digest-<image>-<arch>/<digest>
       - uses: actions/download-artifact@v8
         with:
           path: ${{ runner.temp }}/digests
           pattern: digest-*
-          merge-multiple: true
 
       - uses: docker/setup-buildx-action@v4
 
@@ -150,31 +159,44 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish the version for both platforms
+      - name: Publish the version of each image for both platforms
         working-directory: ${{ runner.temp }}/digests
         run: |
-          # shellcheck disable=SC2046 # one argument per digest
-          docker buildx imagetools create -t "$IMAGE:$VERSION" $(printf "$IMAGE@sha256:%s " *)
+          for name in faclab-caddy faclab-postgres; do
+            references=()
+            for digest in digest-"$name"-*/*; do
+              references+=("$REGISTRY/$name@sha256:$(basename "$digest")")
+            done
+            if [ "${#references[@]}" != 2 ]; then
+              echo "::error::$name: expected two digests (amd64 and arm64), got ${#references[@]}"
+              exit 1
+            fi
+            docker buildx imagetools create -t "$REGISTRY/$name:$VERSION" "${references[@]}"
+          done
 
-      - name: Check the published image
+      - name: Check the published images
         run: |
-          docker buildx imagetools inspect "$IMAGE:$VERSION"
-          platforms="$(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{json .Manifest}}' |
-            jq -r '[.manifests[].platform | select(.os == "linux") | .architecture] | sort | join(" ")')"
-          if [ "$platforms" != "amd64 arm64" ]; then
-            echo "::error::expected amd64 and arm64, got '$platforms'"
-            exit 1
-          fi
-          docker pull --quiet "$IMAGE:$VERSION"
-          label="$(docker image inspect "$IMAGE:$VERSION" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')"
-          if [ "$label" != "$VERSION" ]; then
-            echo "::error::the label org.opencontainers.image.version is '$label', not $VERSION"
-            exit 1
-          fi
-          # The rate limit module, which the Caddyfile needs
-          modules="$(docker run --rm "$IMAGE:$VERSION" caddy list-modules)"
+          for name in faclab-caddy faclab-postgres; do
+            image="$REGISTRY/$name:$VERSION"
+            docker buildx imagetools inspect "$image"
+            platforms="$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}' |
+              jq -r '[.manifests[].platform | select(.os == "linux") | .architecture] | sort | join(" ")')"
+            if [ "$platforms" != "amd64 arm64" ]; then
+              echo "::error::$name: expected amd64 and arm64, got '$platforms'"
+              exit 1
+            fi
+            docker pull --quiet "$image"
+            label="$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')"
+            if [ "$label" != "$VERSION" ]; then
+              echo "::error::$name: the label org.opencontainers.image.version is '$label', not $VERSION"
+              exit 1
+            fi
+          done
+          # The rate limit module, which the Caddyfile needs, and pgBackRest
+          modules="$(docker run --rm "$REGISTRY/faclab-caddy:$VERSION" caddy list-modules)"
           grep -qx 'http.handlers.rate_limit' <<< "$modules"
-          echo "$IMAGE:$VERSION: amd64 and arm64, with http.handlers.rate_limit"
+          docker run --rm "$REGISTRY/faclab-postgres:$VERSION" pgbackrest version
+          echo "faclab-caddy and faclab-postgres $VERSION: amd64 and arm64, with http.handlers.rate_limit and pgBackRest"
 
       - name: GitHub release with the CHANGELOG section
         if: needs.verify.outputs.prerelease == 'false'
@@ -187,5 +209,6 @@ jobs:
             found && /^## \[/ { exit }
             found { print }
           ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
-          printf '\nImagen del Caddy de entrada: %s (amd64 y arm64).\n' "\`$IMAGE:$VERSION\`" >> "$RUNNER_TEMP/notes.md"
+          printf '\nImágenes (amd64 y arm64): el Caddy de entrada, %s, y PostgreSQL con pgBackRest, %s.\n' \
+            "\`$REGISTRY/faclab-caddy:$VERSION\`" "\`$REGISTRY/faclab-postgres:$VERSION\`" >> "$RUNNER_TEMP/notes.md"
           gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
