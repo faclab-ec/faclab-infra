@@ -397,6 +397,19 @@ backup_timers() {
   fi
 }
 
+# The timers of scripts/heartbeats.sh (S8.6): installed when HEARTBEAT_BASE_URL is set in secrets.env,
+# removed when it isn't. Without the heartbeat service there is nothing for them to tell
+heartbeat_timers() {
+  local url
+  url="$(sed -n 's/^HEARTBEAT_BASE_URL=//p' "$ETC/secrets.env" 2> /dev/null | tail -n 1)"
+  if [ -n "$url" ]; then
+    "$HERE/scripts/heartbeats.sh" install-timers ||
+      echo "stack.sh: WARNING: the heartbeat timers couldn't be installed: run scripts/heartbeats.sh install-timers" >&2
+  elif compgen -G '/etc/systemd/system/faclab-heartbeat@*' > /dev/null; then
+    "$HERE/scripts/heartbeats.sh" remove-timers || true
+  fi
+}
+
 # The databases before a deployment, in $BACKUPS/<id> (root, 0600), with the versions that ran then.
 # S8.3 brings the real backups (PITR, off the server); this one is for going back from a deployment
 backup() {
@@ -617,6 +630,7 @@ deploy() {
     prune_images
     step "Backups"
     backup_timers
+    heartbeat_timers
     printf '\nDeployed: %s (%ss)\n' "$(versions_of "$current")" "$SECONDS"
     return 0
   fi

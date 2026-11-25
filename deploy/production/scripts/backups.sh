@@ -10,6 +10,9 @@
 #   backups.sh objects-recent     the same, only objects written in the last 24 hours (every 5 min)
 #   backups.sh report             the state of the backups, as metrics to the Collector (every 5 min)
 #   backups.sh status             the same, for a person: backups, WAL archiving, last runs, timers
+#   backups.sh healthy            exit 0 when no job is late or failed and WAL archiving works; 1 and
+#                                 the offending lines when not; 3 when BACKUPS is off (the heartbeat
+#                                 of S8.6, scripts/heartbeats.sh)
 #   backups.sh check              that WAL archiving works end to end (pgbackrest check)
 #   backups.sh install-timers     install and enable the timers of this checkout; the first full
 #                                 backup, in the background, when there is none
@@ -256,6 +259,17 @@ status() {
   measure
 }
 
+# healthy: the lines of measure that say something is wrong (overdue, failed, WAL failing)
+healthy() {
+  local lines bad
+  lines="$(measure)"
+  bad="$(grep -E '^faclab\.backup\.(overdue|failed|wal\.failing) .* 1$' <<< "$lines" || true)"
+  [ -z "$bad" ] || {
+    printf '%s\n' "$bad"
+    return 1
+  }
+}
+
 install_timers() {
   local unit name code
   [ -d "$UNITS" ] || die "$UNITS doesn't exist: is this a systemd host?"
@@ -319,6 +333,13 @@ main() {
       report "$@"
       ;;
     status) status ;;
+    healthy)
+      if [ "$(backups_setting)" != on ]; then
+        echo "BACKUPS is off in this environment"
+        return 3
+      fi
+      healthy
+      ;;
     check) pgbackrest check ;;
     install-timers) install_timers ;;
     remove-timers) remove_timers ;;

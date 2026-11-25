@@ -11,6 +11,9 @@
 #   that the production example keeps the TLS verification of the backups' storage;
 # - the Collector with the production overlay, and that the overlay's metrics pipeline is the base
 #   one without postgresql/invoicing;
+# - the Collector's two modes (S8.6): sending to SigNoz and `nop` (production's default, no backend),
+#   and that an unknown exporter is rejected;
+# - the heartbeats (S8.6, test-heartbeats.sh);
 # - that no secret file is versioned.
 set -euo pipefail
 
@@ -126,6 +129,27 @@ echo "== Collector"
 compose "$STAGING" run --rm --no-deps collector validate \
   --config=/etc/otelcol-contrib/config.yaml --config=/etc/otelcol-contrib/production.yaml \
   --feature-gates=receiver.postgresql.separateSchemaAttr
+# The exporter of every pipeline comes from TELEMETRY_EXPORTER (S8.6): both modes must validate, and
+# a name that isn't an exporter must not
+for exporter in nop otlp_grpc/signoz; do
+  compose "$STAGING" run --rm --no-deps -e TELEMETRY_EXPORTER="$exporter" collector validate \
+    --config=/etc/otelcol-contrib/config.yaml --config=/etc/otelcol-contrib/production.yaml \
+    --feature-gates=receiver.postgresql.separateSchemaAttr
+  echo "ok: Collector with TELEMETRY_EXPORTER=$exporter"
+done
+if compose "$STAGING" run --rm --no-deps -e TELEMETRY_EXPORTER=not-an-exporter collector validate \
+  --config=/etc/otelcol-contrib/config.yaml --config=/etc/otelcol-contrib/production.yaml \
+  --feature-gates=receiver.postgresql.separateSchemaAttr > /dev/null 2>&1; then
+  echo "the Collector accepts an exporter that doesn't exist: TELEMETRY_EXPORTER isn't reaching its pipelines" >&2
+  exit 1
+fi
+echo "ok: an unknown TELEMETRY_EXPORTER is rejected"
+# Production starts without telemetry backend until someone decides otherwise (S8.6)
+if ! compose production config | grep -qF "TELEMETRY_EXPORTER: nop"; then
+  echo "the production example must keep TELEMETRY_EXPORTER=nop (no SigNoz yet, D-1)" >&2
+  exit 1
+fi
+echo "ok: production's telemetry is off by default"
 # The receivers of the metrics pipeline, in order, from each file
 metrics_receivers() {
   docker run --rm -i mikefarah/yq:4 '.service.pipelines.metrics.receivers | join(" ")' < "$1"
@@ -140,6 +164,9 @@ if [ "$overlay" != "$expected" ]; then
   exit 1
 fi
 echo "ok: metrics receivers ($overlay)"
+
+echo "== Heartbeats"
+"$DEPLOY/scripts/test-heartbeats.sh"
 
 echo "== No secrets in the repository"
 if git ls-files | grep -E '(^|/)secrets\.env$|\.sops\.ya?ml$|\.pem$|(^|/)\.sops\.yaml$|age.*key.*\.txt$'; then
