@@ -164,8 +164,11 @@ services:
       # Docker API through the read-only proxy (docker_stats and the docker resource detector)
       DOCKER_HOST: tcp://docker-socket-proxy:2375
       OTEL_RESOURCE_ATTRIBUTES: deployment.environment.name=${COLLECTOR_ENVIRONMENT:-local}
+      TELEMETRY_EXPORTER: ${TELEMETRY_EXPORTER:-otlp_grpc/signoz}
       SIGNOZ_OTLP_ENDPOINT: ${SIGNOZ_OTLP_ENDPOINT:-signoz-otel-collector:4317}
       SIGNOZ_OTLP_INSECURE: ${SIGNOZ_OTLP_INSECURE:-true}
+      SIGNOZ_INGESTION_KEY: ${SIGNOZ_INGESTION_KEY:-}
+      SIGNOZ_OTLP_AUTHORIZATION: ${SIGNOZ_OTLP_AUTHORIZATION:-}
       # faclab_monitor of each PostgreSQL: core's comes from its `make db-roles` (DATABASE_URL_MONITOR)
       CORE_DB_MONITOR_PASSWORD: ${CORE_DB_MONITOR_PASSWORD:-change-me-monitor}
       INVOICING_DB_MONITOR_PASSWORD: ${INVOICING_DB_MONITOR_PASSWORD:-change-me-monitor}

@@ -475,8 +475,14 @@ services:
     environment:
       DOCKER_HOST: tcp://docker-socket-proxy:2375
       OTEL_RESOURCE_ATTRIBUTES: deployment.environment.name=${ENVIRONMENT:?}
-      SIGNOZ_OTLP_ENDPOINT: ${SIGNOZ_OTLP_ENDPOINT:?}
+      # Where the telemetry goes (S8.6): `nop` drops it (no observability backend yet, the default),
+      # `otlp_grpc/signoz` sends it to SIGNOZ_OTLP_ENDPOINT. The endpoint keeps a placeholder
+      # while it is off because the Collector validates every exporter it defines
+      TELEMETRY_EXPORTER: ${TELEMETRY_EXPORTER:-nop}
+      SIGNOZ_OTLP_ENDPOINT: ${SIGNOZ_OTLP_ENDPOINT:-signoz.invalid:4317}
       SIGNOZ_OTLP_INSECURE: ${SIGNOZ_OTLP_INSECURE:-false}
+      SIGNOZ_INGESTION_KEY: ${SIGNOZ_INGESTION_KEY:-}
+      SIGNOZ_OTLP_AUTHORIZATION: ${SIGNOZ_OTLP_AUTHORIZATION:-}
       CORE_DB_ENDPOINT: postgres:5432
       CORE_DB_MONITOR_PASSWORD: ${DB_MONITOR_PASSWORD:?}
       # Defined in the base configuration but out of the production pipeline

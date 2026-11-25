@@ -1,0 +1,13 @@
+# A heartbeat of Faclab (S8.6, deploy/production/README.md, "Latidos y sondeos"): heartbeats.sh
+# <check>, run by the timer of the same name. scripts/heartbeats.sh install-timers puts it in
+# /etc/systemd/system with the path of the checkout (@SCRIPTS@). Its log: journalctl -u
+# faclab-heartbeat@<check>
+[Unit]
+Description=Faclab heartbeat: %i
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=@SCRIPTS@/heartbeats.sh %i
+TimeoutStartSec=2min

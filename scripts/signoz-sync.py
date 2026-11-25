@@ -5,6 +5,8 @@
     scripts/signoz-sync.py sync [--dry-run] [--prune]
                                               create or update channels, dashboards and alerts
     scripts/signoz-sync.py verify [--hours N] run every panel and alert query and report errors
+    scripts/signoz-sync.py retention [--dry-run] [--logs-days N] [--traces-days N] [--metrics-days N]
+                                              set and read back the retention of each signal (D-7)
 
 The files live in observability/signoz/dashboards (SigNoz dashboards v6, one per file, `name`
 faclab-<slug>) and observability/signoz/alerts (rules v2alpha1, label faclab_rule=<file name>).
@@ -209,7 +211,8 @@ class SigNoz:
         self.url = url.rstrip("/")
         self.api_key = api_key
 
-    def request(self, method: str, path: str, body: dict | None = None, query: dict | None = None):
+    def request(self, method: str, path: str, body: dict | None = None, query: dict | None = None,
+                whole: bool = False):
         url = self.url + path
         if query:
             url += "?" + urllib.parse.urlencode(query)
@@ -239,7 +242,9 @@ class SigNoz:
             raise SigNozError(f"{method} {path}: {error.reason}") from None
         if not payload:
             return None
-        return json.loads(payload).get("data")
+        parsed = json.loads(payload)
+        # The settings endpoints answer their fields at the top level, not inside `data`
+        return parsed if whole else parsed.get("data")
 
     def list_all(self, path: str, key: str) -> list[dict]:
         items, offset = [], 0
@@ -413,6 +418,59 @@ def sync(dry_run: bool, prune: bool) -> int:
     return 0
 
 
+# ─── retention ───────────────────────────────────────────────────────────────────────────────────
+
+# D-7 (OBSERVABILITY.md §4.7): logs 15 days, traces 7, metrics 90. SigNoz keeps one retention per
+# signal. Traces and metrics go through the v1 endpoint, in hours; logs only through v2, in days
+# (v1 answers "SetTTLV2 only supported"). A change is a ClickHouse mutation: the `expected_*` fields
+# of the v1 answer show the value that is being applied until it finishes
+RETENTION_DAYS = {"logs": 15, "traces": 7, "metrics": 90}
+
+
+def current_retention(api: SigNoz, signal: str) -> tuple[int, int | None]:
+    """The retention in force and, while a change is being applied, the one it is going to."""
+    if signal == "logs":
+        answer = api.request("GET", "/api/v2/settings/ttl", whole=True) or {}
+        return int(answer["default_ttl_days"]), None
+    answer = api.request("GET", "/api/v1/settings/ttl", query={"type": signal}, whole=True) or {}
+    expected = answer.get(f"expected_{signal}_ttl_duration_hrs")
+    return int(answer[f"{signal}_ttl_duration_hrs"]) // 24, None if expected is None else int(expected) // 24
+
+
+def set_retention(api: SigNoz, signal: str, days: int) -> None:
+    if signal == "logs":
+        api.request("POST", "/api/v2/settings/ttl", {"type": "logs", "defaultTTLDays": days})
+    else:
+        api.request("POST", "/api/v1/settings/ttl", query={"type": signal, "duration": f"{days * 24}h"})
+
+
+def retention(dry_run: bool, days: dict[str, int]) -> int:
+    api = client()
+    failures = 0
+    try:
+        for signal, wanted in days.items():
+            in_force, applying = current_retention(api, signal)
+            if in_force == wanted and applying in (None, wanted):
+                print(f"{signal:8} sin cambios ({wanted} días)")
+                continue
+            if dry_run:
+                print(f"{signal:8} cambiaría de {in_force} a {wanted} días")
+                continue
+            set_retention(api, signal, wanted)
+            in_force, applying = current_retention(api, signal)
+            # Applied, or accepted and being applied (the mutation runs in ClickHouse)
+            if in_force == wanted or applying == wanted:
+                state = "aplicada" if in_force == wanted else "aceptada, aplicándose"
+                print(f"{signal:8} {state}: {wanted} días")
+            else:
+                print(f"{signal:8} ERROR: pedí {wanted} días y SigNoz dice {in_force}", file=sys.stderr)
+                failures += 1
+    except SigNozError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    return 1 if failures else 0
+
+
 # ─── verify ──────────────────────────────────────────────────────────────────────────────────────
 
 
@@ -496,11 +554,18 @@ def main() -> int:
     sync_parser.add_argument("--prune", action="store_true", help="delete Faclab dashboards and alerts without a file")
     verify_parser = commands.add_parser("verify", help="run every query against SigNoz")
     verify_parser.add_argument("--hours", type=float, default=1, help="time window, in hours (default 1)")
+    retention_parser = commands.add_parser("retention", help="set and read back the retention of logs, traces and metrics")
+    retention_parser.add_argument("--dry-run", action="store_true", help="show what would change without changing it")
+    for signal, default in RETENTION_DAYS.items():
+        retention_parser.add_argument(f"--{signal}-days", type=int, default=default,
+                                      help=f"{signal} retention, in days (default {default})")
     args = parser.parse_args()
     if args.command == "check":
         return check()
     if args.command == "sync":
         return sync(args.dry_run, args.prune)
+    if args.command == "retention":
+        return retention(args.dry_run, {signal: getattr(args, f"{signal}_days") for signal in RETENTION_DAYS})
     return verify(args.hours)
 
 
