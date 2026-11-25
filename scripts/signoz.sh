@@ -12,6 +12,7 @@
 #   scripts/signoz.sh check    validate the dashboards, alerts and runbooks offline (CI)
 #   scripts/signoz.sh sync     create or update the channels, dashboards and alerts in SigNoz
 #   scripts/signoz.sh verify   run every panel and alert query against SigNoz
+#   scripts/signoz.sh retention  set and read back the retention of logs, traces and metrics (D-7)
 #
 # sync and verify take SIGNOZ_URL and SIGNOZ_API_KEY from the environment or .env (see
 # scripts/signoz-sync.py and the README).
@@ -148,11 +149,11 @@ case "${1:-}" in
     compose config -q
     echo "SigNoz compose forged from observability/signoz/casting.yaml is valid"
     ;;
-  check | sync | verify)
+  check | sync | verify | retention)
     exec python3 "$ROOT/scripts/signoz-sync.py" "$@"
     ;;
   *)
-    echo "Usage: $0 up|down|status|config|check|sync|verify" >&2
+    echo "Usage: $0 up|down|status|config|check|sync|verify|retention" >&2
     exit 1
     ;;
 esac
