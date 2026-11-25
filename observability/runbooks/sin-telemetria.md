@@ -3,6 +3,11 @@
 > Reglas: `sin-telemetria-core`, `sin-telemetria-core-worker`, `sin-telemetria-invoicing` y
 > `sin-telemetria-invoicing-worker` · Severidad: **advertencia** · Dashboard: *Faclab · Ecosistema*
 
+> **Apagada a propósito.** Mientras `TELEMETRY_EXPORTER=nop` (producción hasta que haya un SigNoz, S8.6)
+> estas reglas no pueden dispararse porque no hay SigNoz, y su silencio no es una avería. Lo que vigila
+> el servidor lo cubren los latidos y sondeos (README de `deploy/production`, «Latidos y sondeos»).
+> Si SigNoz sí está en uso y esta alerta suena, sigue este runbook.
+
 ## Síntoma
 
 SigNoz no recibe en 10 minutos ninguna muestra de `db.client.connection.count` de un servicio. Todos

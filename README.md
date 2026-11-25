@@ -248,7 +248,20 @@ pudo enviar y reintenta.
 |----------|-------|--------------|
 | `SIGNOZ_OTLP_ENDPOINT` | `signoz-otel-collector:4317` (el collector de SigNoz en `faclab_network`) | El receptor OTLP de SigNoz (VPS aparte o nube, D-1) |
 | `SIGNOZ_OTLP_INSECURE` | `true` (texto plano) | `false`: TLS con los certificados del sistema |
+| `TELEMETRY_EXPORTER` | `otlp_grpc/signoz` | `otlp_grpc/signoz`, o `nop` para descartar todo (S8.6) |
+| `SIGNOZ_INGESTION_KEY` | vacío | La llave de ingesta de SigNoz Cloud, cabecera `signoz-ingestion-key` |
+| `SIGNOZ_OTLP_AUTHORIZATION` | vacío | La cabecera `authorization` (`Bearer <token>`) que revisa el proxy de un receptor autogestionado |
 | `COLLECTOR_ENVIRONMENT` | `local` | `staging` o `production` |
+
+`TELEMETRY_EXPORTER` (S8.6) elige el exporter de los cinco pipelines: es una lista de un elemento que
+lee la variable, así que no hay un segundo archivo de configuración que mantener. Con `nop` el Collector
+sigue recibiendo y procesando, y descarta al final: sin cola que crezca, sin reintentos y sin errores de
+exportación. Un nombre que no sea un exporter definido hace que el Collector no arranque (lo prueba
+`ci-validate.sh`).
+
+Las dos cabeceras van vacías cuando no hacen falta. Se probó el exporter contra un receptor con TLS y
+`bearertokenauth`: entrega con el token correcto, el receptor rechaza uno incorrecto
+(`Unauthenticated`), y falla el handshake si el certificado no es de una CA que el sistema conozca.
 
 ### Permisos
 
@@ -304,8 +317,28 @@ que se le suma como segundo `--config`:
   `invoicing-api:3173`.
 - **Entorno.** `deployment.environment.name` es el `ENVIRONMENT` del despliegue.
 
-Queda para S8.6 el destino con TLS hacia SigNoz (y su llave de ingesta si D-1 elige SigNoz Cloud) y la
-telemetría propia del Collector.
+- **Telemetría apagada (S8.6).** `TELEMETRY_EXPORTER=nop` en `env/production.env.example`: producción
+  arranca sin destino porque aún no hay SigNoz (D-1 sigue abierta). No es un incidente ni una avería:
+  las alertas que leen la telemetría callan, y las críticas las cubren los
+  [latidos y sondeos](deploy/production/README.md#latidos-y-sondeos). Encenderla es cambiar variables,
+  sin tocar imágenes ni código (ver abajo).
+
+**Encenderla** el día que haya un SigNoz al que enviar:
+
+1. En `env/<entorno>.env`:
+   ```bash
+   TELEMETRY_EXPORTER=otlp_grpc/signoz
+   SIGNOZ_OTLP_ENDPOINT=<host:4317>      # el receptor OTLP gRPC, con TLS
+   SIGNOZ_OTLP_INSECURE=false
+   ```
+2. Si el destino pide credencial, en los secretos (`scripts/secrets.sh set <entorno> <nombre>`, el valor
+   por la entrada estándar): `SIGNOZ_INGESTION_KEY` para SigNoz Cloud, `SIGNOZ_OTLP_AUTHORIZATION`
+   (`Bearer <token>`) para un receptor propio detrás de un proxy.
+3. `scripts/secrets.sh push` y `stack.sh install-secrets` en el servidor si cambiaron los secretos, y
+   `stack.sh deploy`, que recrea el Collector con las variables nuevas.
+4. Aplicar la retención y sincronizar dashboards y alertas (ver «SigNoz en producción»).
+
+Para volver a apagarla, `TELEMETRY_EXPORTER=nop` y el mismo despliegue.
 
 ## SigNoz local (observabilidad)
 
@@ -373,6 +406,90 @@ Para que los servicios exporten, ver el detalle en el `.env.example` y el README
 | faclab-web (`npm start`) | `VITE_OTEL_ENABLED=true`; el proxy de Vite lleva `/otlp` a `http://localhost:4318` |
 
 Con todo arriba, una venta del POS se ve en SigNoz como una sola traza: el request en faclab-core, `send sales.confirmed`, `process sales.confirmed` en faclab-invoicing, `send invoices` y `process invoices` de vuelta en faclab-core.
+
+## SigNoz en producción (S8.6)
+
+No hay SigNoz de producción todavía: D-1 (VPS aparte o SigNoz Cloud) sigue abierta y la telemetría está
+apagada (ver «En producción»). Esto es lo que se probó contra el SigNoz local y lo que habrá que hacer el
+día que exista.
+
+### Dónde correrá
+
+- **SigNoz Cloud:** no hay servidor; se crea la cuenta, se copia la llave de ingesta a
+  `SIGNOZ_INGESTION_KEY` y se sigue desde «Retención» abajo (la retención se fija en su consola).
+- **Un VPS aparte:** `casting.yaml` con las versiones fijadas (v0.151.0) y 8 GB de RAM como punto de
+  partida: ClickHouse, su Keeper, PostgreSQL, el ingester y SigNoz no caben bien en 4 GB (el VPS-1 de
+  OVHcloud, de 2 vCores, 4 GB y 40 GB, sirve de laboratorio, no de producción). El receptor OTLP lo
+  protege un proxy con TLS y un token (`SIGNOZ_OTLP_AUTHORIZATION`); el puerto 4317 de SigNoz no se
+  publica.
+
+### Retención por señal (D-7)
+
+`scripts/signoz.sh retention` fija y relee la retención, y es idempotente. Por defecto, la de D-7:
+logs 15 días, trazas 7 y métricas 90 (`--logs-days`, `--traces-days` y `--metrics-days` la cambian;
+`--dry-run` solo muestra qué cambiaría).
+
+```bash
+SIGNOZ_URL=https://signoz.<dominio> SIGNOZ_API_KEY=... scripts/signoz.sh retention --dry-run
+scripts/signoz.sh retention
+```
+
+- Trazas y métricas van por la API v1 (en horas) y los logs solo por la v2 (en días): la v1 contesta
+  «SetTTLV2 only supported» para ellos.
+- Cambiarla es una mutación de ClickHouse: SigNoz la acepta enseguida y la aplica después. Mientras
+  tanto el comando informa «aceptada, aplicándose».
+- Los valores por defecto de SigNoz son 15 días para logs y trazas y 30 para métricas. Se probó con los
+  de D-7 en el SigNoz local y se restauraron los anteriores.
+- Medir el disco el primer mes y ajustar: la alerta `disco` y su [runbook](observability/runbooks/disco.md)
+  avisan antes de que ClickHouse llene el volumen.
+
+### Cuentas y secretos
+
+- **Sin cuentas por defecto.** SigNoz no trae usuarios: la primera cuenta, que es administradora, la
+  crea quien instala, con su correo (no uno compartido). Después, cada persona con su usuario y el rol
+  mínimo (Admin, Editor o Viewer) desde la interfaz.
+- **`signoz.sh sync` y `retention`** usan la llave de una *service account* con rol Admin (Settings,
+  Service Accounts). Esa llave vive en el `.env` de quien opera, no en el servidor.
+- **Sin secreto JWT por defecto (G-52).** La instalación vieja traía el secreto `secret` del proyecto.
+  SigNoz v0.151 usa tokens opacos (los guarda en su tabla `auth_token`) y se negaría a arrancar con el
+  proveedor `jwt` sin un secreto propio. Se verificó en el SigNoz local: sin ninguna variable
+  `SIGNOZ_TOKENIZER_*` ni de secreto, arranca, así que el secreto no interviene. Comprobarlo de nuevo al
+  desplegar: `docker inspect signoz-signoz-0` no debe mostrar variables de tokenizer ni de secreto.
+- **SMTP y avisos:** `SIGNOZ_SMTP_*` (SMTP real), `ALERT_EMAIL_TO`, `TELEGRAM_BOT_TOKEN` y
+  `TELEGRAM_CHAT_ID` (el bot de producción) y `SIGNOZ_EXTERNAL_URL` en el `.env` de quien sincroniza,
+  y `scripts/signoz.sh sync`. Los valores reales no se escriben en este repositorio.
+
+### Actualizar
+
+1. Leer las notas de la versión y subir juntas las imágenes de `casting.yaml` (SigNoz, su ingester,
+   ClickHouse y su Keeper): son las del chart de Helm de esa versión.
+2. Respaldar antes el metastore (ver abajo).
+3. `scripts/signoz.sh config` valida el compose generado; `up` aplica la actualización (el migrador del
+   almacén corre al arrancar).
+4. `scripts/signoz.sh verify` ejecuta cada panel y alerta contra la versión nueva.
+5. Volver atrás: las imágenes anteriores en `casting.yaml`, `up` y, si la base cambió, restaurar el
+   volcado del metastore.
+
+### Respaldo
+
+Lo que se pierde si se pierde el servidor, de menos a más difícil de rehacer:
+
+| Qué | Cómo se recupera |
+|---|---|
+| Dashboards, alertas y canales | Son código: `scripts/signoz.sh sync` los recrea |
+| Cuentas, roles y llaves de API (metastore PostgreSQL) | El volcado de abajo |
+| Datos de telemetría (ClickHouse) | No se respaldan: son de 7 a 90 días y se regeneran. Si el histórico llegara a importar, `BACKUP` de ClickHouse a un almacenamiento externo, que no está montado |
+
+El volcado del metastore (probado en el SigNoz local; contiene contraseñas y llaves, así que se cifra
+y va fuera del servidor, como los respaldos de [RESPALDOS.md](deploy/production/RESPALDOS.md)):
+
+```bash
+docker exec signoz-metastore-postgres-0 sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  | age -r <clave pública> > signoz-metastore-$(date +%F).sql.age
+```
+
+Restaurar: levantar solo el metastore, `age -d … | docker exec -i signoz-metastore-postgres-0 psql -U signoz -d signoz`
+con la base vacía, y `up`. Un simulacro de la restauración queda pendiente hasta que exista el servidor.
 
 ## Dashboards y alertas
 

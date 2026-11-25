@@ -220,7 +220,7 @@ cp deploy/production/env/production.env.example deploy/production/env/production
 Completa los valores `<...>` y los dominios:
 
 - un `KAFKA_CLUSTER_ID` nuevo;
-- el receptor de SigNoz (S8.6);
+- la telemetría (S8.6): `TELEMETRY_EXPORTER=nop` hasta que haya un SigNoz; cuando lo haya, su receptor;
 - el SMTP (D-3): proveedor, remitentes, y SPF, DKIM y DMARC del dominio;
 - el RUC del proveedor del sistema;
 - el almacenamiento externo de los respaldos: endpoint, región y los dos buckets
@@ -321,9 +321,80 @@ sudo deploy/production/scripts/stack.sh compose ps          # cualquier comando 
   --config /etc/caddy/Caddyfile`.
 - **Respaldos:** `sudo deploy/production/scripts/backups.sh status`, y la guía en
   [RESPALDOS.md](RESPALDOS.md).
+- **Latidos y sondeos:** `sudo deploy/production/scripts/heartbeats.sh status` dice qué comprobación
+  falla ahora; la guía, en [Latidos y sondeos](#latidos-y-sondeos).
 - **Kafka y PostgreSQL** no se exponen. Para mirarlos:
   - `stack.sh compose exec kafka kafka-topics --bootstrap-server localhost:9092 --list`;
   - `stack.sh compose exec postgres psql -U postgres`.
+
+## Latidos y sondeos
+
+Producción arranca **sin telemetría** (`TELEMETRY_EXPORTER=nop`, [README de la raíz](../../README.md#en-producción)):
+no hay SigNoz hasta que se decida D-1. Las alertas de SigNoz no existen en ese estado, y lo que no puede
+fallar en silencio con clientes reales (S8.6) lo vigilan dos cosas que no dependen de él:
+
+- **Sondeos HTTP desde fuera** (un servicio externo, configurados a mano): detectan que algo no responde.
+- **Latidos desde el servidor** (`scripts/heartbeats.sh`, un timer de systemd por comprobación, cada 5
+  minutos): detectan lo que desde fuera no se ve. Cada uno avisa al servicio de latidos si todo está
+  bien (`<base>/faclab-<comprobación>`) o si falla (`…/fail`, con el motivo). El servicio alerta con un
+  `fail` y también cuando los latidos dejan de llegar: un servidor caído, un timer detenido.
+
+### Qué se vigila
+
+| Latido (slug) | Falla cuando | Qué hacer |
+|---|---|---|
+| `faclab-stack` | un contenedor no corre, está `unhealthy` o se reinicia (los de una sola corrida deben haber salido con 0) | `stack.sh status` y `stack.sh logs <servicio>` |
+| `faclab-backup` | un respaldo está atrasado o falló, o el archivado del WAL falla (lo que mira `backups.sh`: mismas reglas que `respaldo-atrasado`, `respaldo-fallido` y `wal-sin-archivar`). Con `BACKUPS=off` no envía nada | [respaldos](../../observability/runbooks/respaldos.md) |
+| `faclab-outbox` | el outbox tiene mensajes `failed` (`outbox-failed`) | [mensajes fallidos](../../observability/runbooks/mensajes-fallidos.md) |
+| `faclab-disk` | el disco de Docker supera el 80 % | [disco](../../observability/runbooks/disco.md) |
+
+Los sondeos externos, con el dominio de cada entorno (`/health/*` da 404 desde fuera a propósito: la
+salud la ven `docker` y el latido `faclab-stack`):
+
+| Sondeo | Espera | Qué prueba |
+|---|---|---|
+| `https://app.<dominio>/` | 200 | Caddy, su certificado y la web |
+| `https://api.<dominio>/.well-known/jwks.json` | 200 | el core responde (las claves públicas que verifica facturación) |
+| `https://api.<dominio>/api/v1/invoices` | 401 | facturación responde (sin token contesta 401) |
+| El certificado TLS de `app.` y `api.` | vence en más de 14 días | que Caddy renueve |
+
+### Ponerlos en marcha
+
+1. En el servicio de latidos (Healthchecks.io o uno que acepte pings por nombre con la llave del
+   proyecto), crear los cuatro checks con esos *slugs*, período de 5 minutos, margen (*grace*) de 10, y
+   como canales el correo y el bot de Telegram.
+2. Guardar la URL base con la llave del proyecto, que es un secreto (`https://hc-ping.com/<llave>`):
+   ```bash
+   printf '%s' 'https://hc-ping.com/<llave>' | scripts/secrets.sh set <entorno> HEARTBEAT_BASE_URL
+   scripts/secrets.sh push <entorno> <usuario@servidor>     # y en el servidor: stack.sh install-secrets
+   ```
+3. `stack.sh deploy` (o `heartbeats.sh install-timers`) instala y habilita los timers cuando la URL
+   existe, y los quita cuando se vacía. Comprobar:
+   ```bash
+   sudo deploy/production/scripts/heartbeats.sh status       # qué dice cada comprobación, sin enviar
+   systemctl list-timers 'faclab-heartbeat@*'
+   journalctl -u faclab-heartbeat@stack
+   ```
+4. En el servicio de sondeos, crear los de la tabla con aviso por correo y Telegram.
+
+Ni el script ni los timers imprimen la URL: curl la lee por la entrada estándar y descarta su respuesta.
+Antes de depender de un plan gratuito, leer sus términos: algunos lo limitan a uso personal.
+
+### Prueba controlada
+
+- Un fallo: `stack.sh compose stop core-worker`. En 5 minutos `faclab-stack` avisa con `fail` y el
+  nombre del servicio; `stack.sh compose start core-worker` lo resuelve.
+- Silencio: `systemctl stop faclab-heartbeat@stack.timer`. A los 10 minutos de margen, el servicio
+  avisa de que no llegan latidos; `systemctl start …` lo resuelve.
+- Sin servidor: `scripts/test-heartbeats.sh` prueba cada comprobación contra un receptor local
+  (lo corre `ci-validate.sh`).
+
+### Lo que no cubren
+
+Sin SigNoz no se ven: facturas atascadas o certificados de firma por vencer (hay que leer las tablas de
+negocio y `faclab_monitor` solo ve estadísticas), la tasa de errores 5xx, la latencia del POS ni las
+trazas. Son los que vuelven con la telemetría. Mientras tanto: `make outbox-failed`,
+`make dead-letters` y `GET /api/admin/invoice-discrepancies` en faclab-core, a mano.
 
 ## Despliegue continuo
 
@@ -625,9 +696,10 @@ Diferencias con un VPS real:
     falla con «No route to host».
   - Los contenedores del Docker de la Mac llegan a la IP sin ese permiso: de ahí corren `nmap` y
     `smoke.sh` en la prueba.
-- **No hay SigNoz propio:** el Collector envía al de faclab-infra en la Mac (`host.orb.internal:4317`),
-  que reenvía al SigNoz local cuando está arriba; si no, reintenta y descarta lo que no cabe en su cola
-  (S8.6).
+- **No hay SigNoz propio:** el Collector de staging envía al de faclab-infra en la Mac
+  (`host.orb.internal:4317`), que reenvía al SigNoz local cuando está arriba; si no, reintenta y
+  descarta lo que no cabe en su cola. Con `TELEMETRY_EXPORTER=nop` en `env/staging.env` queda apagada,
+  como en producción (S8.6).
 - **Respaldos apagados** (`BACKUPS=off`) hasta el primer VPS. S8.3 los probó contra el sustituto de
   S3 de `drill/` en la Mac ([RESPALDOS.md](RESPALDOS.md#el-sustituto-de-staging)).
 - **El workflow `Deploy` no llega a la VM,** porque no tiene IP pública: en S8.2 se desplegó desde la
@@ -648,5 +720,12 @@ del core registra la prueba: qué se corrió, sus resultados y la memoria medida
 - **El proveedor real de los respaldos** (S8.3): staging usa el sustituto de `drill/`. Con el primer
   VPS se crean sus buckets, con Object Lock de 7 años para los comprobantes, y se repite el simulacro
   ([RESPALDOS.md](RESPALDOS.md)).
-- **S8.6:** SigNoz de producción, OTLP con TLS y la telemetría propia del Collector.
+- **S8.6, lo que quedó pendiente (D-1 abierta):**
+  - SigNoz de producción (VPS aparte o SigNoz Cloud) y la telemetría encendida con TLS, vista en los seis
+    dashboards;
+  - sus usuarios nominales y canales reales (SMTP, bot de Telegram, `ALERT_EMAIL_TO`,
+    `SIGNOZ_EXTERNAL_URL`), y una alerta de prueba que llegue a ellos;
+  - la telemetría propia del Collector;
+  - los sondeos y latidos contra un servicio real y desde un servidor real (cuentas por crear);
+  - el simulacro de restauración del metastore de SigNoz.
 - **Kafka con TLS y SASL**, si alguna vez sale del servidor (G-49), e IPv6.
