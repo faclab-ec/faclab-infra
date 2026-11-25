@@ -162,32 +162,44 @@ processors:
 
 exporters:
   # SigNoz: locally its collector on faclab_network, plain text; TLS (SIGNOZ_OTLP_INSECURE=false) on
-  # any other environment
+  # any other environment. The two headers are optional and empty when unset: SIGNOZ_INGESTION_KEY
+  # is SigNoz Cloud's `signoz-ingestion-key`, SIGNOZ_OTLP_AUTHORIZATION the `authorization` that a
+  # reverse proxy in front of a self-hosted receiver checks (e.g. "Bearer <token>")
   otlp_grpc/signoz:
     endpoint: ${env:SIGNOZ_OTLP_ENDPOINT:-signoz-otel-collector:4317}
     tls:
       insecure: ${env:SIGNOZ_OTLP_INSECURE:-true}
+    headers:
+      signoz-ingestion-key: ${env:SIGNOZ_INGESTION_KEY:-}
+      authorization: ${env:SIGNOZ_OTLP_AUTHORIZATION:-}
+  # Drops everything: the exporter of an environment without observability backend (S8.6)
+  nop:
 
 service:
   pipelines:
     traces:
       receivers: [otlp]
       processors: [memory_limiter, resource_detection, transform/redact, batch]
-      exporters: [otlp_grpc/signoz]
+      exporters:
+        - ${env:TELEMETRY_EXPORTER:-otlp_grpc/signoz}
     metrics:
       receivers: [otlp, host_metrics, docker_stats, postgresql/core, postgresql/invoicing, kafka_metrics,
         http_check]
       processors: [memory_limiter, resource_detection, transform/redact, batch]
-      exporters: [otlp_grpc/signoz]
+      exporters:
+        - ${env:TELEMETRY_EXPORTER:-otlp_grpc/signoz}
     logs:
       receivers: [otlp]
       processors: [memory_limiter, resource_detection, transform/redact, batch]
-      exporters: [otlp_grpc/signoz]
+      exporters:
+        - ${env:TELEMETRY_EXPORTER:-otlp_grpc/signoz}
     traces/browser:
       receivers: [otlp/browser]
       processors: [memory_limiter, filter/browser, transform/redact, batch]
-      exporters: [otlp_grpc/signoz]
+      exporters:
+        - ${env:TELEMETRY_EXPORTER:-otlp_grpc/signoz}
     metrics/browser:
       receivers: [otlp/browser]
       processors: [memory_limiter, filter/browser, transform/redact, batch]
-      exporters: [otlp_grpc/signoz]
+      exporters:
+        - ${env:TELEMETRY_EXPORTER:-otlp_grpc/signoz}

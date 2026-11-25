@@ -32,7 +32,7 @@ ENV_NAMES=(CORE_DB_OWNER_PASSWORD CORE_DB_APP_PASSWORD CORE_DB_WORKER_PASSWORD D
   OBJECT_STORAGE_SECRET_ACCESS_KEY GARAGE_RPC_SECRET GARAGE_ADMIN_TOKEN SMTP_USER SMTP_PASSWORD
   BACKUP_PG_ACCESS_KEY_ID BACKUP_PG_SECRET_ACCESS_KEY BACKUP_PG_CIPHER_PASS
   BACKUP_OBJECTS_ACCESS_KEY_ID BACKUP_OBJECTS_SECRET_ACCESS_KEY BACKUP_OBJECTS_CRYPT_PASSWORD
-  BACKUP_OBJECTS_CRYPT_SALT)
+  BACKUP_OBJECTS_CRYPT_SALT SIGNOZ_INGESTION_KEY SIGNOZ_OTLP_AUTHORIZATION HEARTBEAT_BASE_URL)
 
 die() {
   echo "secrets.sh: $*" >&2
@@ -123,6 +123,9 @@ env:
   BACKUP_OBJECTS_SECRET_ACCESS_KEY: ''
   BACKUP_OBJECTS_CRYPT_PASSWORD: '$(generate hex)'
   BACKUP_OBJECTS_CRYPT_SALT: '$(generate hex)'
+  SIGNOZ_INGESTION_KEY: ''
+  SIGNOZ_OTLP_AUTHORIZATION: ''
+  HEARTBEAT_BASE_URL: ''
 files:
   postgres_password: '$(generate hex)'
   jwt_private_key.pem: |
@@ -136,7 +139,9 @@ YAML
   mv "$file.tmp" "$file"
   echo "Created $file. Empty, to fill with secrets.sh set $environment <name> (the value from stdin):"
   echo "  SMTP_USER, SMTP_PASSWORD (the mail provider) and BACKUP_PG_* and BACKUP_OBJECTS_* keys (the"
-  echo "  storage outside the server, RESPALDOS.md)"
+  echo "  storage outside the server, RESPALDOS.md); HEARTBEAT_BASE_URL (the ping URL of the heartbeat"
+  echo "  service, scripts/heartbeats.sh) and, when there is a telemetry backend, SIGNOZ_INGESTION_KEY or"
+  echo "  SIGNOZ_OTLP_AUTHORIZATION"
 }
 
 edit() {
@@ -165,7 +170,11 @@ set_value() {
   else
     value="$(cat)"
   fi
-  [ -n "$value" ] || [ "$name" = SMTP_USER ] || [ "$name" = SMTP_PASSWORD ] || die "empty value for $name"
+  # Optional ones may be empty: the mail provider's login, the telemetry backend's credentials
+  case "$name" in
+    SMTP_USER | SMTP_PASSWORD | SIGNOZ_INGESTION_KEY | SIGNOZ_OTLP_AUTHORIZATION) ;;
+    *) [ -n "$value" ] || die "empty value for $name" ;;
+  esac
   # The PEM keeps its final line break, as init writes it
   [ "$name" != jwt_private_key.pem ] || value+=$'\n'
   # sops reads it from stdin as JSON: never in a command line
