@@ -1,0 +1,13 @@
+diff --git a/src/invoicing/infra/event_handlers.py b/src/invoicing/infra/event_handlers.py
+index dd1557e..f687bfe 100644
+--- a/src/invoicing/infra/event_handlers.py
++++ b/src/invoicing/infra/event_handlers.py
+@@ -241,7 +241,7 @@ def build_sale_confirmed_message(
+             "sale_number": event.number,
+             "branch_id": point.branch_id,
+             "source": event.source,
+-            "issuer_ruc": point.issuer_ruc,
++            "issuer_tax_id": point.issuer_ruc,
+             "establishment_code": point.establishment_code,
+             "establishment_address": point.establishment_address,
+             "emission_point_code": point.emission_point_code,
