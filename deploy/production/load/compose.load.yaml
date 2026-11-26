@@ -1,0 +1,60 @@
+# The load tests of S9.2 on top of the production stack, only on a throwaway copy of staging:
+#
+#   stack.sh compose -f load/compose.load.yaml up -d
+#
+# (README.md here). The images under test are named by the copy's versions file, not here. It changes
+# three things and nothing else: the SRI is the simulator of e2e/ (never celcer: a load test doesn't
+# hit the SRI), faclab-invoicing runs with NODE_ENV=local (the only way it accepts another SRI address), and the
+# edge's limits by IP are out of the way, because every request comes from one machine.
+#
+# Relative paths are those of the project directory (deploy/production).
+
+services:
+  caddy:
+    environment:
+      RATE_LIMIT_APP_EVENTS: 1000000
+      RATE_LIMIT_API_EVENTS: 1000000
+      RATE_LIMIT_LOGIN_EVENTS: 100000
+
+  core-api:
+    environment: &core-load
+      # The public API's own limits (S6.3), measured apart: true to test them, false for capacity
+      PUBLIC_API_RATE_LIMIT_ENABLED: ${LOAD_PUBLIC_RATE_LIMIT:-true}
+
+  core-worker:
+    environment: *core-load
+
+  invoicing-api:
+    environment: &invoicing-load
+      NODE_ENV: local
+      SRI_TEST_RECEPTION_WSDL: http://sri-simulator:8081/recepcion?wsdl
+      SRI_TEST_AUTHORIZATION_WSDL: http://sri-simulator:8081/autorizacion?wsdl
+
+  invoicing-worker:
+    environment: *invoicing-load
+    depends_on:
+      sri-simulator:
+        condition: service_started
+
+  sri-simulator:
+    image: node:22-bookworm-slim
+    command: ["node", "/srv/server.mjs"]
+    environment:
+      SRI_SIM_QUIET: "true"
+      # Each SRI operation takes this long, and invoices are authorized at the first query unless
+      # LOAD_SRI_PENDING=01 (EN PROCESO once, retried by invoicing a minute later)
+      SRI_SIM_DELAY_MS: ${LOAD_SRI_DELAY_MS:-800}
+      SRI_SIM_PENDING_CODDOCS: ${LOAD_SRI_PENDING:-}
+    volumes:
+      - ../../e2e/sri-simulator:/srv:ro
+    read_only: true
+    cap_drop: [ALL]
+    mem_limit: 512m
+    networks:
+      - data
+
+  # No observability backend, as production today (S8.6): the services still instrument and export,
+  # the Collector drops it. otlp_grpc/signoz for the run that checks the alerts against SigNoz
+  collector:
+    environment:
+      TELEMETRY_EXPORTER: ${LOAD_TELEMETRY_EXPORTER:-nop}

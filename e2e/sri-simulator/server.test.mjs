@@ -19,8 +19,8 @@ const voucher = (key, { ruc = RUC, ambiente = '1', signature = '<ds:Signature Id
   `<claveAcceso>${key}</claveAcceso><codDoc>${key.slice(8, 10)}</codDoc></infoTributaria>` +
   `${signature}</factura>`;
 
-async function withServer(run) {
-  const server = createSriServer();
+async function withServer(run, options) {
+  const server = createSriServer(options);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${server.address().port}`;
   const post = async (path, body) =>
@@ -92,3 +92,14 @@ test('returns what does not identify a signed test voucher', () =>
     }
     assert.match(await ask(key), /<numeroComprobantes>0<\/numeroComprobantes>/);
   }));
+
+test('takes the configured time to answer, as the real service would', () =>
+  withServer(
+    async ({ send }) => {
+      const started = Date.now();
+      await send(voucher(accessKey('01', 4)));
+
+      assert.ok(Date.now() - started >= 200);
+    },
+    { delayMs: 200 },
+  ));
