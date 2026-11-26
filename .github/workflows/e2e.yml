@@ -1,0 +1,201 @@
+name: E2E
+
+# The whole system, end to end (S9.1): e2e/run.sh against the four repositories. Every night, only
+# when some of them changed since the last green night; by hand with any refs; and on the PRs that
+# change the suite's environment. Guide: e2e/README.md
+on:
+  schedule:
+    # 06:00 UTC, 01:00 in Ecuador
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      core_ref:
+        description: faclab-api ref
+        default: master
+      web_ref:
+        description: faclab-web ref
+        default: master
+      invoicing_ref:
+        description: faclab-invoicing ref
+        default: master
+      sri:
+        description: "celcer needs the SRI_E2E_* secrets"
+        type: choice
+        options: [simulator, celcer]
+        default: simulator
+      inject_regression:
+        description: Break the sales.confirmed contract on purpose; green means the suite caught it
+        type: boolean
+        default: false
+  pull_request:
+    branches: [master]
+    paths:
+      - "e2e/**"
+      - ".github/workflows/e2e.yml"
+      - "scripts/create-topics.sh"
+      - "scripts/init-invoicing-db.sh"
+      - "garage/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  e2e:
+    name: e2e
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: faclab-infra
+
+      # By hand: the refs asked for. On a PR: the branch of the same name in each repository when
+      # there is one, so a change across repositories is tried together. Otherwise master
+      - name: Resolve the refs
+        id: refs
+        env:
+          EVENT: ${{ github.event_name }}
+          BRANCH: ${{ github.head_ref }}
+          CORE_INPUT: ${{ inputs.core_ref }}
+          WEB_INPUT: ${{ inputs.web_ref }}
+          INVOICING_INPUT: ${{ inputs.invoicing_ref }}
+        run: |
+          set -euo pipefail
+          resolve() {
+            local repository=$1 asked=$2
+            if [[ "$EVENT" == pull_request ]] &&
+              git ls-remote --exit-code --heads "https://github.com/faclab-ec/$repository.git" "$BRANCH" >/dev/null; then
+              echo "$BRANCH"
+            else
+              echo "${asked:-master}"
+            fi
+          }
+          {
+            echo "core=$(resolve faclab-api "$CORE_INPUT")"
+            echo "web=$(resolve faclab-web "$WEB_INPUT")"
+            echo "invoicing=$(resolve faclab-invoicing "$INVOICING_INPUT")"
+          } >>"$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
+      - name: Identify tonight's commits
+        id: commits
+        if: github.event_name == 'schedule'
+        run: |
+          set -euo pipefail
+          key="e2e-green-$GITHUB_SHA"
+          for repository in faclab-api faclab-web faclab-invoicing; do
+            sha=$(git ls-remote "https://github.com/faclab-ec/$repository.git" refs/heads/master | cut -f1)
+            [[ -n "$sha" ]]
+            key="$key-$sha"
+          done
+          echo "key=$key" >>"$GITHUB_OUTPUT"
+
+      # A hit means these four commits already passed: nothing to learn from running them again
+      - name: Look for a green run of these commits
+        id: green
+        if: github.event_name == 'schedule'
+        uses: actions/cache/restore@v6
+        with:
+          path: .e2e-green
+          key: ${{ steps.commits.outputs.key }}
+          lookup-only: true
+
+      - name: Nothing changed
+        if: steps.green.outputs.cache-hit == 'true'
+        run: echo "The four repositories didn't change since the last green night." >>"$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/checkout@v7
+        if: steps.green.outputs.cache-hit != 'true'
+        with:
+          repository: faclab-ec/faclab-api
+          ref: ${{ steps.refs.outputs.core }}
+          path: faclab-core
+
+      - uses: actions/checkout@v7
+        if: steps.green.outputs.cache-hit != 'true'
+        with:
+          repository: faclab-ec/faclab-web
+          ref: ${{ steps.refs.outputs.web }}
+          path: faclab-web
+
+      - uses: actions/checkout@v7
+        if: steps.green.outputs.cache-hit != 'true'
+        with:
+          repository: faclab-ec/faclab-invoicing
+          ref: ${{ steps.refs.outputs.invoicing }}
+          path: faclab-invoicing
+
+      - uses: actions/setup-node@v7
+        if: steps.green.outputs.cache-hit != 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: faclab-web/package-lock.json
+
+      - name: Install Playwright
+        if: steps.green.outputs.cache-hit != 'true'
+        working-directory: faclab-web
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      # The certificate of the SRI test environment, only when asked for celcer
+      - name: Prepare the certificate
+        if: inputs.sri == 'celcer'
+        env:
+          P12_BASE64: ${{ secrets.SRI_E2E_P12_BASE64 }}
+        run: |
+          set -euo pipefail
+          [[ -n "$P12_BASE64" ]] || { echo "SRI_E2E_P12_BASE64 isn't set" >&2; exit 1; }
+          (umask 077 && base64 --decode <<<"$P12_BASE64" >"$RUNNER_TEMP/sri-e2e.p12")
+
+      - name: Run the suite
+        if: steps.green.outputs.cache-hit != 'true'
+        env:
+          SRI: ${{ inputs.sri || 'simulator' }}
+          INJECT: ${{ inputs.inject_regression || false }}
+          CELCER_P12_PASSWORD: ${{ inputs.sri == 'celcer' && secrets.SRI_E2E_P12_PASSWORD || '' }}
+          CELCER_RUC: ${{ inputs.sri == 'celcer' && secrets.SRI_E2E_RUC || '' }}
+        run: |
+          set -euo pipefail
+          args=(--sri "$SRI")
+          if [[ "$SRI" == celcer ]]; then
+            export E2E_P12_PATH="$RUNNER_TEMP/sri-e2e.p12"
+            export E2E_P12_PASSWORD="$CELCER_P12_PASSWORD" E2E_RUC="$CELCER_RUC"
+          fi
+          if [[ "$INJECT" == true ]]; then
+            args+=(--inject-contract-regression)
+          fi
+          faclab-infra/e2e/run.sh "${args[@]}"
+
+      - name: Remove the certificate
+        if: always() && inputs.sri == 'celcer'
+        run: rm -f "$RUNNER_TEMP/sri-e2e.p12"
+
+      # Public repositories: with a real certificate nothing is uploaded. With the simulator
+      # everything in them is made up for the run
+      - name: Keep the report and the logs
+        if: failure() && inputs.sri != 'celcer'
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-report
+          path: |
+            faclab-infra/e2e/artifacts
+            faclab-web/playwright-report-full-stack
+            faclab-web/test-results-full-stack
+          include-hidden-files: false
+          retention-days: 7
+
+      - name: Mark these commits green
+        if: github.event_name == 'schedule' && steps.green.outputs.cache-hit != 'true'
+        run: date -u >.e2e-green
+
+      - uses: actions/cache/save@v6
+        if: github.event_name == 'schedule' && steps.green.outputs.cache-hit != 'true'
+        with:
+          path: .e2e-green
+          key: ${{ steps.commits.outputs.key }}

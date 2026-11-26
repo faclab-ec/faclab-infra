@@ -1,0 +1,248 @@
+# The whole system, thrown away after the end-to-end suite (S9.1): run it through e2e/run.sh, which
+# generates the passwords and keys of each run (none is versioned) and removes the volumes at the end.
+# The images are built from the sibling repositories (E2E_*_DIR). Its own project, network and ports,
+# so it runs beside the development stack.
+name: faclab-e2e
+
+x-core-env: &core-env
+  # local: development JWT key and plain HTTP cookies, only ever on this machine
+  ENVIRONMENT: local
+  LOG_LEVEL: INFO
+  DATABASE_URL: postgresql://faclab_app:${E2E_DB_PASSWORD:?run it through e2e/run.sh}@postgres:5432/faclab
+  DATABASE_URL_WORKER: postgresql://faclab_worker:${E2E_DB_PASSWORD}@postgres:5432/faclab
+  CORS_ORIGINS: http://localhost:${E2E_WEB_PORT:-18080}
+  DOCS_ENABLED: "false"
+  KAFKA_ENABLED: "true"
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  OTEL_ENABLED: "false"
+  EMAIL_ENABLED: "false"
+  # The reconciliation (S4.3) runs during the suite: a sale whose invoice result never arrived would
+  # be listed. Two minutes leaves room for the simulator's EN PROCESO and its retry a minute later
+  INVOICE_RECONCILIATION_INTERVAL_SECONDS: "15"
+  INVOICE_RECONCILIATION_PENDING_MINUTES: "2"
+  WORKER_HEALTH_FILE: /tmp/faclab-worker-health.json
+
+x-invoicing-env: &invoicing-env
+  # local, never production: this deployment can't reach the SRI environment with tax validity
+  NODE_ENV: local
+  LOG_LEVEL: info
+  DATABASE_URL: postgres://faclab_invoicing:${E2E_DB_PASSWORD}@postgres:5432/faclab_invoicing
+  KAFKA_BROKERS: kafka:9092
+  CORS_ORIGINS: http://localhost:${E2E_WEB_PORT:-18080}
+  JWT_JWKS_URL: http://core-api:8080/.well-known/jwks.json
+  CERTIFICATE_PASSWORD_KEY: ${E2E_CERTIFICATE_PASSWORD_KEY}
+  OBJECT_STORAGE_ENDPOINT: http://object-storage:3900
+  OBJECT_STORAGE_REGION: garage
+  OBJECT_STORAGE_BUCKET: faclab-invoicing
+  OBJECT_STORAGE_ACCESS_KEY_ID: ${E2E_STORAGE_KEY_ID}
+  OBJECT_STORAGE_SECRET_ACCESS_KEY: ${E2E_STORAGE_SECRET}
+  OBJECT_STORAGE_FORCE_PATH_STYLE: "true"
+  INVOICE_EMAIL_ENABLED: "false"
+  # The simulator by default; empty (e2e/run.sh --sri celcer) leaves the SRI test environment
+  SRI_TEST_RECEPTION_WSDL: ${E2E_SRI_RECEPTION_WSDL-http://sri-simulator:8081/recepcion?wsdl}
+  SRI_TEST_AUTHORIZATION_WSDL: ${E2E_SRI_AUTHORIZATION_WSDL-http://sri-simulator:8081/autorizacion?wsdl}
+  OTEL_SDK_DISABLED: "true"
+
+x-core-build: &core-build
+  context: ${E2E_CORE_DIR:-../../faclab-core}
+  target: production
+
+x-invoicing-build: &invoicing-build
+  context: ${E2E_INVOICING_DIR:-../../faclab-invoicing}
+  target: production
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: ${E2E_DB_PASSWORD}
+      INVOICING_DB_PASSWORD: ${E2E_DB_PASSWORD}
+      INVOICING_DATABASES: faclab_invoicing
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../scripts/init-invoicing-db.sh:/docker-entrypoint-initdb.d/init-invoicing-db.sh:ro
+    healthcheck:
+      # Over TCP: during the first start the init scripts run on a server listening only on its socket
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  kafka:
+    image: confluentinc/cp-kafka:${KAFKA_VERSION:-7.9.0}
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://kafka:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      CLUSTER_ID: ZTJlLWZhY2xhYi1jbHVzdA
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx512m
+    healthcheck:
+      test: ["CMD-SHELL", "KAFKA_HEAP_OPTS=-Xmx64m kafka-broker-api-versions --bootstrap-server localhost:9092 > /dev/null"]
+      interval: 10s
+      timeout: 20s
+      retries: 10
+      start_period: 20s
+
+  kafka-topics:
+    image: confluentinc/cp-kafka:${KAFKA_VERSION:-7.9.0}
+    restart: "no"
+    entrypoint: ["/scripts/create-topics.sh"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC_PARTITIONS: "3"
+      KAFKA_HEAP_OPTS: -Xmx256m
+    volumes:
+      - ../scripts/create-topics.sh:/scripts/create-topics.sh:ro
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  object-storage:
+    image: dxflrs/garage:${GARAGE_VERSION:-v2.4.1}
+    command: ["/garage", "server", "--single-node", "--default-bucket"]
+    environment:
+      GARAGE_RPC_SECRET: ${E2E_GARAGE_RPC_SECRET}
+      GARAGE_ADMIN_TOKEN: ${E2E_GARAGE_ADMIN_TOKEN}
+      GARAGE_DEFAULT_ACCESS_KEY: ${E2E_STORAGE_KEY_ID}
+      GARAGE_DEFAULT_SECRET_KEY: ${E2E_STORAGE_SECRET}
+      GARAGE_DEFAULT_BUCKET: faclab-invoicing
+    volumes:
+      - ../garage/garage.toml:/etc/garage.toml:ro
+      - object_storage_data:/var/lib/garage
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  sri-simulator:
+    image: node:22-bookworm-slim
+    command: ["node", "/srv/server.mjs"]
+    volumes:
+      - ./sri-simulator:/srv:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8081/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+  # Roles, database, migrations and the local seed (scripts/seed.py: two companies with the same
+  # admin). The development image, which has scripts/
+  core-setup:
+    build:
+      context: ${E2E_CORE_DIR:-../../faclab-core}
+      target: development
+    image: faclab-e2e/core-setup
+    restart: "no"
+    command: ["sh", "-c", "python -m src.shared.infra.db_roles && alembic upgrade head && python -m scripts.seed"]
+    environment:
+      <<: *core-env
+      DATABASE_URL_ADMIN: postgresql://postgres:${E2E_DB_PASSWORD}@postgres:5432/postgres
+      DATABASE_URL_MIGRATIONS: postgresql://faclab_owner:${E2E_DB_PASSWORD}@postgres:5432/faclab
+      AUTH_SEED_USERNAME: ${E2E_ADMIN_USERNAME:-admin}
+      AUTH_SEED_EMAIL: admin@example.com
+      AUTH_SEED_PASSWORD: ${E2E_ADMIN_PASSWORD}
+      AUTH_SEED_TENANT_RUC: ${E2E_RUC}
+      AUTH_SEED_TENANT_NAME: Empresa de prueba
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  core-api:
+    build: *core-build
+    image: faclab-e2e/core
+    environment:
+      <<: *core-env
+      RUN_BACKGROUND: "false"
+      WEB_CONCURRENCY: 1
+    ports:
+      - "127.0.0.1:${E2E_API_PORT:-18000}:8080"
+    depends_on:
+      core-setup:
+        condition: service_completed_successfully
+
+  core-worker:
+    image: faclab-e2e/core
+    pull_policy: never
+    command: ["python", "worker.py"]
+    environment: *core-env
+    healthcheck:
+      test: ["CMD", "python", "-m", "src.shared.infra.worker.health", "/tmp/faclab-worker-health.json"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+    depends_on:
+      core-api:
+        condition: service_started
+      core-setup:
+        condition: service_completed_successfully
+      kafka-topics:
+        condition: service_completed_successfully
+
+  invoicing-migrate:
+    build: *invoicing-build
+    image: faclab-e2e/invoicing
+    restart: "no"
+    command: ["node", "node_modules/node-pg-migrate/bin/node-pg-migrate.js", "-m", "migrations", "up"]
+    environment:
+      DATABASE_URL: postgres://faclab_invoicing:${E2E_DB_PASSWORD}@postgres:5432/faclab_invoicing
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  invoicing-api:
+    image: faclab-e2e/invoicing
+    pull_policy: never
+    environment:
+      <<: *invoicing-env
+      RUN_BACKGROUND: "false"
+    ports:
+      - "127.0.0.1:${E2E_INVOICING_PORT:-18173}:3173"
+    depends_on:
+      invoicing-migrate:
+        condition: service_completed_successfully
+      object-storage:
+        condition: service_healthy
+
+  invoicing-worker:
+    image: faclab-e2e/invoicing
+    pull_policy: never
+    command: ["node", "-r", "./dist/instrumentation.js", "dist/worker.js"]
+    environment: *invoicing-env
+    depends_on:
+      invoicing-migrate:
+        condition: service_completed_successfully
+      object-storage:
+        condition: service_healthy
+      kafka-topics:
+        condition: service_completed_successfully
+      sri-simulator:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ${E2E_WEB_DIR:-../../faclab-web}
+      target: production
+    image: faclab-e2e/web
+    environment:
+      API_BASE_URL: http://localhost:${E2E_API_PORT:-18000}
+      INVOICING_API_URL: http://localhost:${E2E_INVOICING_PORT:-18173}
+      ENVIRONMENT: local
+    tmpfs:
+      - /srv/runtime:uid=10001,gid=10001,mode=0755,size=1m
+    ports:
+      - "127.0.0.1:${E2E_WEB_PORT:-18080}:8080"
+
+volumes:
+  postgres_data:
+  object_storage_data:

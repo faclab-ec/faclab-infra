@@ -18,3 +18,8 @@ secrets.env
 *.sops.yaml
 .sops.yaml
 *.pem
+
+# The end-to-end runs (e2e/run.sh): their logs and, with --keep, the throwaway credentials
+e2e/artifacts/
+e2e/.env.run
+e2e/.certificate.p12

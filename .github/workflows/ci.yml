@@ -38,7 +38,14 @@ jobs:
         run: python3 scripts/collector-redaction-test.py
 
       - name: ShellCheck
-        run: shellcheck scripts/*.sh deploy/production/scripts/*.sh deploy/production/drill/*.sh
+        run: shellcheck scripts/*.sh deploy/production/scripts/*.sh deploy/production/drill/*.sh e2e/*.sh
+
+      # The end-to-end environment (S9.1): the SRI simulator's tests and the compose file. The suite
+      # itself runs in e2e.yml
+      - name: Check the end-to-end environment
+        run: |
+          node --test e2e/sri-simulator/server.test.mjs
+          E2E_DB_PASSWORD=ci docker compose -f e2e/compose.yaml config -q
 
       # The workflows (S8.2): release and deploy only run on a tag or by hand, so this is what
       # checks them on every PR. The image brings shellcheck for their run: blocks

@@ -623,6 +623,13 @@ faclab-infra sigue la misma convención que core, invoicing y web (S8.2):
 Una **prerelease** (`vX.Y.Z-rc.1`) se publica desde cualquier commit subido y sirve para staging;
 producción solo acepta versiones finales.
 
+## Pruebas de punta a punta
+
+`e2e/run.sh` levanta el sistema completo en un entorno desechable (con los otros tres repositorios como
+carpetas hermanas), recorre en un navegador la venta, la factura, la nota de crédito y el cierre de
+caja, y lo destruye. El SRI es un simulador (`e2e/sri-simulator`) o, a mano, `celcer`. Corre cada noche
+y a demanda en el workflow `E2E`. Guía: [e2e/README.md](e2e/README.md).
+
 ## Variables de entorno
 
 Consulta `.env.example` para ver todas las variables disponibles y sus valores por defecto.
@@ -634,6 +641,7 @@ Cada PR y cada push a `master` corren `.github/workflows/ci.yml` en GitHub Actio
 - valida `docker-compose.yml` con las variables de `.env.example`;
 - valida la configuración del Collector con su imagen fijada (`otelcol validate`, con los volúmenes y variables del servicio);
 - revisa los scripts con ShellCheck;
+- prueba el simulador del SRI y valida el compose de las pruebas de punta a punta (`e2e/`);
 - forja `observability/signoz/casting.yaml` con el `foundryctl` fijado y valida el compose generado (`scripts/signoz.sh config`);
 - valida los dashboards, las alertas y los runbooks sin red (`scripts/signoz-sync.py check`);
 - revisa los workflows con `actionlint` (los de release y despliegue solo corren con un tag o a mano);
@@ -649,7 +657,9 @@ Para correr lo mismo en local:
 ```bash
 docker compose --env-file .env.example config -q
 docker compose --env-file .env.example run --rm --no-deps collector validate --config=/etc/otelcol-contrib/config.yaml
-shellcheck scripts/*.sh deploy/production/scripts/*.sh   # o: docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable ...
+shellcheck scripts/*.sh deploy/production/scripts/*.sh e2e/*.sh   # o: docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable ...
+node --test e2e/sri-simulator/server.test.mjs
+E2E_DB_PASSWORD=ci docker compose -f e2e/compose.yaml config -q
 scripts/signoz.sh config
 python3 scripts/signoz-sync.py check
 docker run --rm -v "$PWD:/repo:ro" --workdir /repo rhysd/actionlint:1.7.12
