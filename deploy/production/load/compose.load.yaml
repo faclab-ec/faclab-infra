@@ -29,6 +29,11 @@ services:
       NODE_ENV: local
       SRI_TEST_RECEPTION_WSDL: http://sri-simulator:8081/recepcion?wsdl
       SRI_TEST_AUTHORIZATION_WSDL: http://sri-simulator:8081/autorizacion?wsdl
+      # NODE_ENV=local prints through pino-pretty, which production doesn't: warnings only, so its
+      # CPU doesn't show up in the measurements
+      LOG_LEVEL: ${LOAD_INVOICING_LOG_LEVEL:-warn}
+      # Not a setting of the production stack: here to measure what raising it would give
+      INVOICE_WORKER_CONCURRENCY: ${LOAD_INVOICE_CONCURRENCY:-4}
 
   invoicing-worker:
     environment: *invoicing-load
