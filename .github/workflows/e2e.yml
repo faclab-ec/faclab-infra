@@ -49,7 +49,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: faclab-infra
 
@@ -98,7 +98,7 @@ jobs:
       - name: Look for a green run of these commits
         id: green
         if: github.event_name == 'schedule'
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .e2e-green
           key: ${{ steps.commits.outputs.key }}
@@ -108,28 +108,28 @@ jobs:
         if: steps.green.outputs.cache-hit == 'true'
         run: echo "The four repositories didn't change since the last green night." >>"$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.green.outputs.cache-hit != 'true'
         with:
           repository: faclab-ec/faclab-api
           ref: ${{ steps.refs.outputs.core }}
           path: faclab-core
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.green.outputs.cache-hit != 'true'
         with:
           repository: faclab-ec/faclab-web
           ref: ${{ steps.refs.outputs.web }}
           path: faclab-web
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.green.outputs.cache-hit != 'true'
         with:
           repository: faclab-ec/faclab-invoicing
           ref: ${{ steps.refs.outputs.invoicing }}
           path: faclab-invoicing
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: steps.green.outputs.cache-hit != 'true'
         with:
           node-version: 22
@@ -180,7 +180,7 @@ jobs:
       # everything in them is made up for the run
       - name: Keep the report and the logs
         if: failure() && inputs.sri != 'celcer'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-report
           path: |
@@ -194,7 +194,7 @@ jobs:
         if: github.event_name == 'schedule' && steps.green.outputs.cache-hit != 'true'
         run: date -u >.e2e-green
 
-      - uses: actions/cache/save@v6
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: github.event_name == 'schedule' && steps.green.outputs.cache-hit != 'true'
         with:
           path: .e2e-green
