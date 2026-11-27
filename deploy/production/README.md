@@ -671,7 +671,22 @@ VM de staging (`docker stats`), con una empresa y una venta facturada:
 - Ningún contenedor murió por memoria ni se reinició.
 - Los límites dejan holgura para la carga real y para PostgreSQL, que crece con sus búferes:
   `shared_buffers` de 384 MB.
-- Ajústalos en `env/<entorno>.env` cuando el piloto dé su línea base (S9.2).
+
+Medido bajo carga en S9.2 (informe `docs/architecture/CARGA.md` de faclab-core), en una copia de la VM
+de staging con 4 vCPU:
+
+- **Capacidad:** unas 600 ventas por minuto en el POS (150 veces el pico de la ferretería piloto) y 110
+  facturas autorizadas por minuto. La CPU es lo primero que se agota.
+- **Memoria:** unos 2,3 GB en total (`core-api` 480 MB, `postgres` 560 MB, `kafka` 550 MB). Los límites
+  no se cambiaron.
+- **`CORE_WEB_CONCURRENCY` se queda en 2** con 4 vCPU: con 4 la latencia empeoró y las conexiones
+  llegaron a 144 de 150.
+- **Disco:** unos 25 KB por venta facturada.
+- Son cifras de referencia: hay que repetirlas en el primer VPS y ajustar los límites en
+  `env/<entorno>.env` con el tráfico del piloto.
+
+`load/compose.load.yaml` es el override de esas pruebas, solo para una copia desechable: SRI simulado,
+límites por IP abiertos y telemetría apagada. Cómo se usa, en `tests/load/README.md` de faclab-core.
 
 ## Staging en una VM local
 

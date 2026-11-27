@@ -2,10 +2,14 @@
 #
 #   stack.sh compose -f load/compose.load.yaml up -d
 #
-# (README.md here). The images under test are named by the copy's versions file, not here. It changes
-# three things and nothing else: the SRI is the simulator of e2e/ (never celcer: a load test doesn't
-# hit the SRI), faclab-invoicing runs with NODE_ENV=local (the only way it accepts another SRI address), and the
-# edge's limits by IP are out of the way, because every request comes from one machine.
+# (how to use it: faclab-core, tests/load/README.md). The images under test are named by the copy's
+# versions file, not here. It changes what a load test can't have as in production:
+#
+# - the SRI is the simulator of e2e/, never celcer: a load test doesn't hit the SRI;
+# - faclab-invoicing runs with NODE_ENV=local, the only way it accepts another SRI address, and logs
+#   warnings only, so the pretty printing of that mode doesn't weigh on the measurements;
+# - the edge's limits by IP are out of the way, because every request comes from one machine;
+# - the telemetry is dropped (nop), as production does today.
 #
 # Relative paths are those of the project directory (deploy/production).
 
