@@ -16,7 +16,9 @@
 # Referrer-Policy, X-Frame-Options); these cover every response, also the errors of Caddy
 (security_headers) {
 	header {
-		Strict-Transport-Security "max-age={$HSTS_MAX_AGE:31536000}"
+		# includeSubDomains (ASVS 3.4.1, S9.3) only reaches the names under each site, never its
+		# siblings of the same domain
+		Strict-Transport-Security "max-age={$HSTS_MAX_AGE:31536000}; includeSubDomains"
 		X-Content-Type-Options nosniff
 		Referrer-Policy strict-origin-when-cross-origin
 		-Server
