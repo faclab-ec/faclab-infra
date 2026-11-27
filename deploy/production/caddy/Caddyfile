@@ -25,11 +25,15 @@
 	}
 }
 
-# JSON access log on stdout. Caddy leaves out Authorization and Cookie by default
+# JSON access log on stdout. Caddy leaves out Authorization and Cookie by default; the query
+# string goes too (S9.3): searches carry a RUC, a cédula or a name (LOPDP, like faclab-core's spans)
 (access_log) {
 	log {
 		output stdout
-		format json
+		format filter {
+			wrap json
+			request>uri regexp "\?.*$" "?[redacted]"
+		}
 	}
 }
 
