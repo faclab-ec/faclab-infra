@@ -87,10 +87,11 @@
 	encode zstd gzip
 
 	rate_limit {
-		# Logins and client credentials: core also locks a username or an IP after failures
+		# Logins, the platform console's included (S9.3), and client credentials: core also locks a
+		# username or an IP after failures
 		zone login_ip {
 			match {
-				path /api/auth/login /api/oauth/token
+				path /api/auth/login /api/platform/auth/login /api/oauth/token
 			}
 			key {remote_host}
 			events {$RATE_LIMIT_LOGIN_EVENTS:20}
