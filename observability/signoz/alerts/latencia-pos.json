@@ -1,7 +1,7 @@
 {
   "alert": "Latencia del POS",
   "alertType": "METRIC_BASED_ALERT",
-  "description": "El p95 de las rutas /api/pos/sales* de faclab-core pasa de 1,5 s en promedio durante 10 minutos.",
+  "description": "El p95 de las rutas /api/pos/sales* de faclab-core pasa de 1 s en promedio durante 10 minutos.",
   "ruleType": "threshold_rule",
   "schemaVersion": "v2alpha1",
   "condition": {
@@ -54,7 +54,7 @@
           "name": "warning",
           "op": "above",
           "matchType": "on_average",
-          "target": 1.5,
+          "target": 1,
           "channels": [
             "faclab-correo"
           ]
@@ -87,7 +87,7 @@
   },
   "annotations": {
     "summary": "Latencia del POS",
-    "description": "El p95 de las rutas /api/pos/sales* de faclab-core pasa de 1,5 s en promedio durante 10 minutos. Valor: {{$value}} (umbral {{$threshold}}). Runbook: https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/latencia-pos.md",
+    "description": "El p95 de las rutas /api/pos/sales* de faclab-core pasa de 1 s en promedio durante 10 minutos. Valor: {{$value}} (umbral {{$threshold}}). Runbook: https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/latencia-pos.md",
     "runbook_url": "https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/latencia-pos.md"
   },
   "disabled": false

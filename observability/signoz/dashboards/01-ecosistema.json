@@ -260,7 +260,7 @@
         "spec": {
           "display": {
             "name": "Outbox: el más antiguo",
-            "description": "Consulta: faclab.outbox.oldest_age, el máximo de todos los tópicos. Unidad: segundos. Umbral: naranja > 5 min, rojo > 15 min. Acción: revisar el worker del core y Kafka (runbook outbox-atascado)"
+            "description": "Consulta: faclab.outbox.oldest_age, el máximo de todos los tópicos. Unidad: segundos. Umbral: naranja > 2 min, rojo > 10 min. Acción: revisar el worker del core y Kafka (runbook outbox-atascado)"
           },
           "plugin": {
             "kind": "signoz/NumberPanel",
@@ -274,14 +274,14 @@
               },
               "thresholds": [
                 {
-                  "value": 300,
+                  "value": 120,
                   "operator": "above",
                   "unit": "s",
                   "color": "#FFA940",
                   "format": "background"
                 },
                 {
-                  "value": 900,
+                  "value": 600,
                   "operator": "above",
                   "unit": "s",
                   "color": "#F1575F",
