@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Validate docker-compose.yml
         run: docker compose --env-file .env.example config -q
@@ -50,7 +50,7 @@ jobs:
       # The workflows (S8.2): release and deploy only run on a tag or by hand, so this is what
       # checks them on every PR. The image brings shellcheck for their run: blocks
       - name: actionlint
-        run: docker run --rm -v "$PWD:/repo:ro" --workdir /repo rhysd/actionlint:1.7.12 -color
+        run: docker run --rm -v "$PWD:/repo:ro" --workdir /repo rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
 
       # deploy/production (S8.1, S8.2): compose with each env and versions file, the versions against
       # the compatibility matrix, the edge Caddy (image and Caddyfile in both TLS modes), the

@@ -1,0 +1,116 @@
+name: Security
+
+# Known vulnerabilities in the images of the production stack (S9.3). Ours (faclab-caddy,
+# faclab-postgres) fail the job on a HIGH or CRITICAL with a fix, unless .trivyignore.yaml accepts
+# it with a statement and an expired_at (faclab-core's docs/architecture/SEGURIDAD.md). The
+# third-party ones of deploy/production/compose.yaml are only reported: their fixes come by moving
+# their version. Every Monday too: advisories arrive without commits
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  schedule:
+    - cron: "41 11 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned by digest: in March 2026 the tags of aquasec/trivy and of its GitHub actions were
+  # replaced by builds that stole CI secrets (CVE-2026-33634). These jobs hold no secret, and Trivy
+  # reads our images from a file, never from the Docker socket
+  TRIVY_IMAGE: aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
+  TRIVY_POLICY: --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --ignorefile /src/.trivyignore.yaml --exit-code 1
+
+jobs:
+  image-scan:
+    name: image-scan (${{ matrix.image }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: caddy
+          # gosu (the official image's, 1.20, built with Go 1.24.6) only drops root to the postgres
+          # user when the container starts: no network, nothing it reads comes from a client. Its Go
+          # standard library advisories don't reach it; it is still listed in the summary
+          - image: postgres
+            skip: --skip-files usr/local/bin/gosu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the image
+        run: docker build -t "faclab-${{ matrix.image }}:ci" "deploy/production/${{ matrix.image }}"
+
+      - name: Scan the image
+        env:
+          SKIP: ${{ matrix.skip }}
+        run: |
+          docker save "faclab-${{ matrix.image }}:ci" -o "$RUNNER_TEMP/image.tar"
+          read -ra policy <<< "$TRIVY_POLICY $SKIP"
+          docker run --rm -v "$RUNNER_TEMP/image.tar:/image.tar:ro" -v "$PWD:/src:ro" \
+            -v "$RUNNER_TEMP/trivy:/root/.cache/trivy" "$TRIVY_IMAGE" \
+            image --input /image.tar "${policy[@]}"
+
+      # The inventory of what the image carries (ASVS 15.1.2), CycloneDX
+      - name: Software bill of materials
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/sbom"
+          docker run --rm -v "$RUNNER_TEMP/image.tar:/image.tar:ro" -v "$RUNNER_TEMP/sbom:/out" \
+            -v "$RUNNER_TEMP/trivy:/root/.cache/trivy" "$TRIVY_IMAGE" \
+            image --input /image.tar --format cyclonedx \
+            --output "/out/faclab-${{ matrix.image }}.cdx.json"
+          {
+            echo "### faclab-${{ matrix.image }} (every severity)"
+            echo '```'
+            docker run --rm -v "$RUNNER_TEMP/image.tar:/image.tar:ro" \
+              -v "$RUNNER_TEMP/trivy:/root/.cache/trivy" "$TRIVY_IMAGE" \
+              image --input /image.tar --scanners vuln --format table --quiet \
+              --table-mode summary
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: sbom-${{ matrix.image }}
+          path: ${{ runner.temp }}/sbom/
+          retention-days: 90
+
+  # Their HIGH and CRITICAL with a fix, as each default version of the production compose file
+  # names them. It never fails: moving a version is a change of the stack (COMPATIBILITY.md)
+  third-party-images:
+    name: third-party-images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Scan the images of deploy/production/compose.yaml
+        run: |
+          images=$(grep -oE 'image: [a-z0-9./-]+:\$\{[A-Z_]+:-[^}]+\}' deploy/production/compose.yaml \
+            | sed -E 's/image: ([^:]+):\$\{[A-Z_]+:-([^}]+)\}/\1:\2/' | sort -u)
+          {
+            echo '### Third-party images (HIGH and CRITICAL with a fix)'
+            for image in $images; do
+              echo "#### $image"
+              echo '```'
+              docker run --rm -v "$RUNNER_TEMP/trivy:/root/.cache/trivy" "$TRIVY_IMAGE" \
+                image --image-src remote --scanners vuln --severity HIGH,CRITICAL \
+                --ignore-unfixed --format table --quiet --table-mode summary "$image" \
+                || echo "could not scan $image"
+              echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -11,7 +11,10 @@ FROM postgres:${POSTGRES_VERSION}
 
 ARG PGBACKREST_VERSION=2.60.1-1.pgdg13+1
 
+# The upgrade brings the security fixes the official image doesn't have yet: the image scan fails
+# on a HIGH or CRITICAL with a fix (S9.3)
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends "pgbackrest=${PGBACKREST_VERSION}" curl \
     && rm -rf /var/lib/apt/lists/* \
     # The spool (asynchronous archiving), its lock and its log, owned by postgres: archive_command

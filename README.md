@@ -666,6 +666,35 @@ docker run --rm -v "$PWD:/repo:ro" --workdir /repo rhysd/actionlint:1.7.12
 deploy/production/scripts/ci-validate.sh
 ```
 
+### Escaneo de seguridad (S9.3)
+
+`.github/workflows/security.yml` corre en cada PR, en cada push a `master` y los lunes:
+
+- **`image-scan (caddy)` e `image-scan (postgres)`:** construyen las dos imágenes del stack y las escanean con Trivy.
+  - **Política:** fallan con un aviso alto o crítico que tenga arreglo, salvo que `.trivyignore.yaml` lo acepte con motivo
+    y `expired_at`.
+  - **gosu:** el de faclab-postgres se salta; solo baja privilegios al arrancar.
+  - **SBOM:** cada job guarda el CycloneDX como artefacto.
+- **`third-party-images`:** informa los avisos de las imágenes de terceros del compose de producción, sin fallar nunca; su
+  arreglo es subir de versión, con COMPATIBILITY.md.
+
+Detalles de la ejecución:
+- **Trivy** va fijado por digest (`aquasec/trivy:0.76.2@sha256:…`), nunca como action: sus tags fueron reemplazados por
+  versiones maliciosas en marzo de 2026 (CVE-2026-33634). Lee las imágenes desde un archivo, sin el socket de Docker.
+- **Las actions de todos los workflows** van fijadas por SHA, con la versión en un comentario. Dependabot
+  (`.github/dependabot.yml`) las mueve una vez al mes.
+
+El informe y los criterios están en `faclab-core/docs/architecture/SEGURIDAD.md`. En local, con la misma imagen:
+
+```bash
+docker build -t faclab-caddy:local deploy/production/caddy
+docker save faclab-caddy:local -o /tmp/caddy.tar
+docker run --rm -v /tmp/caddy.tar:/image.tar:ro -v "$PWD:/src:ro" \
+  aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb \
+  image --input /image.tar --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed \
+  --ignorefile /src/.trivyignore.yaml --exit-code 1
+```
+
 ## Comandos utiles
 
 ```bash

@@ -330,7 +330,7 @@ services:
   # KRaft, one node, only on the internal network
   kafka:
     <<: *service
-    image: confluentinc/cp-kafka:${KAFKA_VERSION:-7.9.0}
+    image: confluentinc/cp-kafka:${KAFKA_VERSION:-7.9.11}
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -366,7 +366,7 @@ services:
 
   # Creates the topics (partitions and retention) and exits; idempotent (scripts/create-topics.sh)
   kafka-topics:
-    image: confluentinc/cp-kafka:${KAFKA_VERSION:-7.9.0}
+    image: confluentinc/cp-kafka:${KAFKA_VERSION:-7.9.11}
     restart: "no"
     logging: *logging
     entrypoint: ["/scripts/create-topics.sh"]
