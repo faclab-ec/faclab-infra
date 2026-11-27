@@ -1,7 +1,7 @@
 {
   "alert": "Outbox atascado",
   "alertType": "METRIC_BASED_ALERT",
-  "description": "El mensaje pendiente más antiguo del outbox del core lleva más de 5 minutos sin publicarse.",
+  "description": "El mensaje pendiente más antiguo del outbox del core lleva más de 2 minutos sin publicarse.",
   "ruleType": "threshold_rule",
   "schemaVersion": "v2alpha1",
   "condition": {
@@ -59,7 +59,7 @@
           "name": "warning",
           "op": "above",
           "matchType": "last",
-          "target": 300,
+          "target": 120,
           "channels": [
             "faclab-correo"
           ]
@@ -68,7 +68,7 @@
           "name": "critical",
           "op": "above",
           "matchType": "last",
-          "target": 900,
+          "target": 600,
           "channels": [
             "faclab-correo",
             "faclab-telegram"
@@ -102,7 +102,7 @@
   },
   "annotations": {
     "summary": "Outbox atascado",
-    "description": "El mensaje pendiente más antiguo del outbox del core lleva más de 5 minutos sin publicarse. Valor: {{$value}} (umbral {{$threshold}}). Runbook: https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/outbox-atascado.md",
+    "description": "El mensaje pendiente más antiguo del outbox del core lleva más de 2 minutos sin publicarse. Valor: {{$value}} (umbral {{$threshold}}). Runbook: https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/outbox-atascado.md",
     "runbook_url": "https://github.com/faclab-ec/faclab-infra/blob/master/observability/runbooks/outbox-atascado.md"
   },
   "disabled": false

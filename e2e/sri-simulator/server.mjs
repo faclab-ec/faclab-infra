@@ -2,7 +2,8 @@
 // authorization over SOAP, with the test environment's WSDLs (wsdl/, downloaded from celcer, only
 // the address changes). It checks what identifies a voucher, not what the SRI validates for tax
 // purposes: neither the XSD (faclab-invoicing validates it before signing) nor the signature itself.
-// No dependencies. Run: node server.mjs (SRI_SIM_PORT, SRI_SIM_PENDING_CODDOCS)
+// No dependencies. Run: node server.mjs (SRI_SIM_PORT, SRI_SIM_PENDING_CODDOCS, SRI_SIM_DELAY_MS:
+// how long each operation takes, as the real service would, for the load tests of S9.2)
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
@@ -158,7 +159,7 @@ const readBody = (request) =>
     request.on('error', reject);
   });
 
-export function createSriServer(options) {
+export function createSriServer({ delayMs = 0, ...options } = {}) {
   const sri = createSri(options);
   return createServer(async (request, response) => {
     const send = (status, body, type = 'text/xml; charset=utf-8') => {
@@ -176,6 +177,7 @@ export function createSriServer(options) {
         return send(200, wsdl.replace(service.celcer, `http://${request.headers.host}${path}`));
       }
       const body = await readBody(request);
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
       if (path === '/recepcion') {
         return send(200, envelope(service.namespace, 'validarComprobante', sri.receive(body)));
       }
@@ -190,7 +192,8 @@ export function createSriServer(options) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const port = Number(process.env.SRI_SIM_PORT ?? 8081);
   const pendingCodDocs = (process.env.SRI_SIM_PENDING_CODDOCS ?? '01').split(',').filter(Boolean);
-  const server = createSriServer({ pendingCodDocs });
+  const delayMs = Number(process.env.SRI_SIM_DELAY_MS ?? 0);
+  const server = createSriServer({ pendingCodDocs, delayMs });
   server.listen(port, () => console.log(`SRI simulator on :${port}`));
   for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => process.exit(0));
 }

@@ -126,7 +126,7 @@
         "spec": {
           "display": {
             "name": "Edad del mensaje más antiguo",
-            "description": "Consulta: faclab.outbox.oldest_age por tópico. Unidad: segundos. Umbral: 5 min advertencia, 15 min crítica. Acción: runbook outbox-atascado"
+            "description": "Consulta: faclab.outbox.oldest_age por tópico. Unidad: segundos. Umbral: 2 min advertencia, 10 min crítica. Acción: runbook outbox-atascado"
           },
           "plugin": {
             "kind": "signoz/TimeSeriesPanel",
@@ -161,16 +161,16 @@
               },
               "thresholds": [
                 {
-                  "value": 300,
+                  "value": 120,
                   "unit": "s",
                   "color": "#FFA940",
-                  "label": "5 min"
+                  "label": "2 min"
                 },
                 {
-                  "value": 900,
+                  "value": 600,
                   "unit": "s",
                   "color": "#F1575F",
-                  "label": "15 min"
+                  "label": "10 min"
                 }
               ]
             }

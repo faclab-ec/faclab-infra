@@ -166,7 +166,7 @@
         "spec": {
           "display": {
             "name": "p95 por ruta",
-            "description": "Consulta: p95 de http.server.request.duration de faclab-core por http.route. Unidad: segundos. Umbral: 1,5 s en /api/pos/sales* (alerta latencia-pos). Acción: ver las trazas lentas de esa ruta"
+            "description": "Consulta: p95 de http.server.request.duration de faclab-core por http.route. Unidad: segundos. Umbral: 1 s en /api/pos/sales* (alerta latencia-pos). Acción: ver las trazas lentas de esa ruta"
           },
           "plugin": {
             "kind": "signoz/TimeSeriesPanel",
@@ -201,10 +201,10 @@
               },
               "thresholds": [
                 {
-                  "value": 1.5,
+                  "value": 1,
                   "unit": "s",
                   "color": "#F1575F",
-                  "label": "POS 1,5 s"
+                  "label": "POS 1 s"
                 }
               ]
             }

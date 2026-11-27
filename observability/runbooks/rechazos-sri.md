@@ -1,16 +1,25 @@
-# Aumento de rechazos del SRI
+# Aumento de comprobantes rechazados
 
-> Regla: `rechazos-sri` (`faclab.invoices.rejections`, por `faclab.sri.message.code`) · Severidad:
-> **advertencia** · Dashboard: *Faclab · Facturación electrónica*, panel «Rechazos por código»
+> Regla: `rechazos-sri` (`faclab.invoices.transitions` hacia `rejected`) · Severidad: **advertencia** ·
+> Dashboard: *Faclab · Facturación electrónica*, panel «Rechazos por código»
 
 ## Síntoma
 
-El SRI rechazó más de 3 comprobantes en una hora: DEVUELTA en la recepción o NO AUTORIZADO. La
-etiqueta `faclab.sri.message.code` es el identificador del primer error del SRI, por ejemplo `35`
-(estructura) o `65` (fecha de emisión extemporánea).
+Más de 3 comprobantes quedaron rechazados en una hora:
+
+- por el SRI: DEVUELTA en la recepción o NO AUTORIZADO. El panel «Rechazos por código» los separa por
+  `faclab.sri.message.code`, el identificador del primer error, por ejemplo `35` (estructura) o `65`
+  (fecha de emisión extemporánea);
+- o por faclab-invoicing antes de numerarlos (por ejemplo, un consumidor final sobre el límite). Esos
+  no aparecen en el panel por código: se ven en el comprobante.
 
 El panel del dashboard muestra además el porcentaje sobre los autorizados. El umbral del 5 % de
-OBSERVABILITY §8 queda solo en el panel hasta tener una línea base (S9.2).
+OBSERVABILITY §8 queda solo en el panel: con el volumen de un piloto, unos pocos documentos mueven el
+porcentaje (línea base de S9.2).
+
+La regla lee las transiciones y no los códigos desde S9.2: cada código nuevo abría una serie, cuyo
+primer punto `increase` no cuenta. Ahora solo hay una serie por estado de origen y tipo de
+comprobante; la primera de cada una tras un reinicio del worker todavía se pierde.
 
 ## Diagnóstico
 

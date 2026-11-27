@@ -1,11 +1,12 @@
 # Outbox atascado
 
 > Regla: `outbox-atascado` (`faclab.outbox.oldest_age`, por tópico) · Severidad: **advertencia** con
-> más de 5 min, **crítica** con más de 15 min · Dashboard: *Faclab · Kafka y mensajería*
+> más de 2 min, **crítica** con más de 10 min · Dashboard: *Faclab · Kafka y mensajería*
 
 ## Síntoma
 
-El mensaje pendiente más antiguo del outbox del core lleva más de 5 minutos sin publicarse en Kafka.
+El mensaje pendiente más antiguo del outbox del core lleva más de 2 minutos sin publicarse en Kafka. Lo normal es menos de 2 segundos, también con el
+sistema saturado (línea base de S9.2).
 Las ventas confirmadas no llegan a facturación (`sales.confirmed`), ni las notas de crédito
 (`credit_notes.requested`). La etiqueta `messaging.destination.name` dice el tópico.
 
@@ -38,7 +39,7 @@ Las ventas confirmadas no llegan a facturación (`sales.confirmed`), ni las nota
 
 ## Escalamiento
 
-Crítica a los 15 minutos: escalar si Kafka o el worker no vuelven en 30 minutos. Las ventas siguen
+Crítica a los 10 minutos: escalar si Kafka o el worker no vuelven en 30 minutos. Las ventas siguen
 guardadas en el outbox: no se pierden, se facturan con retraso.
 
 ## Prueba controlada
