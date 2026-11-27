@@ -29,7 +29,7 @@ flowchart LR
 | `core-api`, `core-worker` | faclab-core | El API (2 procesos de uvicorn) y el worker (outbox, consumidor de Kafka, webhooks, tareas) | 768 y 512 MB |
 | `invoicing-api`, `invoicing-worker` | faclab-invoicing | El API y el worker que habla con el SRI | 384 y 512 MB |
 | `postgres` | `faclab-postgres`: `postgres:17.12` con pgBackRest (`postgres/Dockerfile`) | Las bases `faclab` (core) y `faclab_invoicing`; archiva el WAL y hace los respaldos fuera del servidor ([RESPALDOS.md](RESPALDOS.md)) | 1,5 GB |
-| `kafka` | `confluentinc/cp-kafka:7.9.0` | KRaft, un nodo, solo en la red interna | 1 GB |
+| `kafka` | `confluentinc/cp-kafka:7.9.11` | KRaft, un nodo, solo en la red interna | 1 GB |
 | `kafka-topics` | la de Kafka | Crea los tópicos y termina | — |
 | `object-storage` | `dxflrs/garage:v2.4.1` | XML, RIDE y logos de facturación (compatible con S3, D-2) | 256 MB |
 | `collector`, `docker-socket-proxy` | `otel/opentelemetry-collector-contrib:0.165.0` | Telemetría de los servicios y del navegador, métricas de infraestructura, envío a SigNoz | 512 MB |
